@@ -62,9 +62,10 @@ class DiffusionRunner():
 
         return render_result
 
-    def get_guidance(self, cameras: List[Camera]):
+    def get_guidance(self, cameras: List[Camera], obj_meta):
         pointcloud_processor = self.get_pointcloud_processor()
-        pointcloud_processor.render_conditions(cameras, self.scene.dataset.getmeta('obj_meta'))  # type: ignore
+        # pointcloud_processor.render_conditions(cameras, self.scene.dataset.getmeta('obj_meta'))  # type: ignore
+        pointcloud_processor.render_conditions(cameras, obj_meta)  # type: ignore
         guide_rgb_path = []
         guide_mask_path = []
         for camera in cameras:
@@ -119,7 +120,7 @@ class WaymoDiffusionRunner(DiffusionRunner):
     def __init__(self, scene: Scene):
         super(WaymoDiffusionRunner, self).__init__(scene)
 
-    def run(self, cameras: List[Camera], train_cameras: List[Camera], use_render=True, scale: float = 0.3, masked_guidance: bool = False):
+    def run(self, cameras: List[Camera], train_cameras: List[Camera], obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
         cameras = [camera for camera in cameras if camera.meta['cam'] == 0]  # Front camera
         diffusion_results = []
 
@@ -128,7 +129,7 @@ class WaymoDiffusionRunner(DiffusionRunner):
             print(f'Running diffusion for novel view sequence {novel_view_id}')
             cur_cameras = [camera for camera in cameras if camera.meta['novel_view_id'] == novel_view_id]
             cur_cameras = list(sorted(cur_cameras, key=lambda x: x.meta['frame']))
-            diffusion_result = self.run_sequence(cur_cameras, train_cameras, use_render, scale, masked_guidance)
+            diffusion_result = self.run_sequence(cur_cameras, train_cameras, obj_meta, use_render, scale, masked_guidance)
             diffusion_results.append(diffusion_result)
 
         diffusion_results = torch.cat(diffusion_results, dim=0)
@@ -226,7 +227,7 @@ class WaymoDiffusionRunner(DiffusionRunner):
         return diffusion_result
 
     @torch.no_grad()
-    def run_sequence(self, cameras: List[Camera], train_cameras: List[Camera], use_render=True, scale: float = 0.3, masked_guidance: bool = False):
+    def run_sequence(self, cameras: List[Camera], train_cameras: List[Camera], obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
         frames = [camera.meta['frame'] for camera in cameras]
         train_frames = np.array([camera.meta['frame'] for camera in train_cameras])
 
@@ -236,7 +237,7 @@ class WaymoDiffusionRunner(DiffusionRunner):
         step = sample_frames - self.window_size
         start_idxs = list(range(0, len(frames), step))
 
-        guide_rgb_path_all, guide_mask_path_all = self.get_guidance(cameras)
+        guide_rgb_path_all, guide_mask_path_all = self.get_guidance(cameras, obj_meta)
         assert len(guide_rgb_path_all) == num_frames, f'Guide image should have {num_frames} frames'
         assert len(guide_mask_path_all) == num_frames, f'Guide mask should have {num_frames} frames'
 

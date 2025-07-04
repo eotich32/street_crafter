@@ -19,6 +19,7 @@ cfg.gpus = [-1]  # list of gpus to use
 cfg.debug = False
 cfg.resume = True  # If set to True, resume training from the last checkpoint.
 cfg.no_date = True
+cfg.diffusion_parallel = 0
 
 cfg.source_path = ''
 cfg.model_path = ''

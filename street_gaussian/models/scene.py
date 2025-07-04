@@ -16,7 +16,8 @@ class Scene:
                  dataset: Dataset,
                  gaussians: StreetGaussianModel,  # StreetGaussian Model
                  diffusion: Optional[VideoDiffusionModel] = None,  # VideoDiffusion Model
-                 pointcloud_processor: Optional[BasePointCloudProcessor] = None  # Pointcloud Processor
+                 pointcloud_processor: Optional[BasePointCloudProcessor] = None,  # Pointcloud Processor
+                 device='cuda',
         ):
         self.dataset = dataset
         self.gaussians = gaussians
@@ -34,9 +35,9 @@ class Scene:
             print("Creating gaussian model from point cloud")
             self.gaussians.create_from_pcd(pcd=None, spatial_lr_scale=self.dataset.getmeta('scene_radius'))
 
-            # Move training images to GPU
-            for camera in list(self.getTrainCameras() + self.getNovelViewCameras()):
-                camera.set_device('cuda')
+            # # Move training images to GPU
+            # for camera in list(self.getTrainCameras() + self.getNovelViewCameras()):
+            #     camera.set_device('cuda')
         else:
             # First check if there is a checkpoint saved and get the iteration to load from
             assert (os.path.exists(cfg.trained_model_dir))
@@ -50,9 +51,9 @@ class Scene:
             print("Loading checkpoint at iteration {}".format(self.loaded_iter))
             checkpoint_path = os.path.join(cfg.trained_model_dir, f"iteration_{str(self.loaded_iter)}.pth")
             assert os.path.exists(checkpoint_path)
-            state_dict = torch.load(checkpoint_path)
+            state_dict = torch.load(checkpoint_path, map_location=device)
             self.gaussians.load_state_dict(state_dict=state_dict)
-        
+
         # render conditions
         if (cfg.mode == 'train' and cfg.diffusion.use_diffusion) or cfg.mode == 'diffusion':
             assert self.diffusion is not None
