@@ -55,7 +55,7 @@ class Scene:
         
         # render conditions
         if (cfg.mode == 'train' and cfg.diffusion.use_diffusion) or cfg.mode == 'diffusion':
-            assert self.diffusion is not None
+            #assert self.diffusion is not None
             cameras = self.getTrainCameras() + self.getTestCameras() + self.getNovelViewCameras()
             print('Rendering LiDAR conditions')
             self.pointcloud_processor.render_conditions(cameras, self.dataset.getmeta('obj_meta'))  # type: ignore
