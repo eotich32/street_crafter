@@ -3,7 +3,7 @@ import torch
 import random
 import time
 from random import randint
-from create_scene import create_scene
+from create_scene import create_scene, create_scene_for_diffusion_inference
 from street_gaussian.models.street_gaussian_model import StreetGaussianModel
 from street_gaussian.models.scene import Scene
 from street_gaussian.models.street_gaussian_renderer import StreetGaussianRenderer
@@ -29,6 +29,13 @@ import pathlib
 
 from easyvolcap.utils.console_utils import *
 from easyvolcap.utils.prof_utils import setup_profiler, profiler_start, profiler_stop, profiler_step
+import torch.multiprocessing as mp
+import threading
+
+
+# 共享CUDA上下文初始化
+torch.cuda.init()
+
 
 def saveRuntimeCode(dst: str) -> None:
     additionalIgnorePatterns = ['.git', '.gitignore', "submodules", "video_diffusion", "nvs_solver"]
@@ -49,6 +56,63 @@ def saveRuntimeCode(dst: str) -> None:
     shutil.copytree(log_dir, dst, ignore=shutil.ignore_patterns(*ignorePatterns))
 
     print('Backup Finished!')
+
+
+def diffusion_inference_worker(device_id, scene_metadata, obj_meta, novel_viewpoint_stack, scale, iteration,return_dict):
+    try:
+        cfg.mode = 'parallel_diffusion'
+        cfg.loaded_iter = iteration
+        torch.cuda.set_device(device_id)
+        device = torch.device(f'cuda:{device_id}')
+        scene, train_viewpoint_stack = create_scene_for_diffusion_inference(scene_metadata, device=device)
+        print(f'===================== Diffusion runner in gpu:{device_id}, num of novel_viewpoint_stack: {len(novel_viewpoint_stack)}, num of train_viewpoint_stack: {len(train_viewpoint_stack)}')
+        diffusion_runner = getDiffusionRunner(scene)
+        for v in novel_viewpoint_stack:
+            v.set_device('cuda')
+        with torch.no_grad():
+            diffusion_runner.run(
+                novel_viewpoint_stack,
+                train_viewpoint_stack,
+                obj_meta=obj_meta,
+                use_render=True,
+                scale=scale,
+                masked_guidance=iteration >= cfg.diffusion.masked_guidance_iter
+            )
+        return_dict[device_id] = [v.meta['diffusion_original_image'].clone().cpu() for v in novel_viewpoint_stack]
+    except Exception as e:
+        print(f"===================== !!!!!!!!!!!!!!! ERROR: Diffusion runner process (gpuid:{device_id}) error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return_dict[device_id] = None
+
+
+def create_diffusion_inference_processes(parallel_cnt, scene, obj_meta, novel_viewpoint_stack, scale, iteration):
+    mp.set_start_method('spawn', force=True)
+    processes = []
+    manager = mp.Manager()
+    return_dict = manager.dict()
+    for device_id in range(1, parallel_cnt+1):
+        start_idx = (device_id-1) * len(novel_viewpoint_stack) // parallel_cnt
+        end_idx = device_id * len(novel_viewpoint_stack) // parallel_cnt
+        p = mp.Process(
+            target=diffusion_inference_worker,
+            args=(device_id,scene.dataset.metadata,obj_meta,novel_viewpoint_stack[start_idx:end_idx],scale,iteration,return_dict)
+        )
+        processes.append(p)
+    for t in processes:
+        t.start()
+
+    for t in processes:
+        t.join()
+        print(f"===================== Diffusion runner process {t.pid} finished，exitcode: {t.exitcode}")
+        if t.exitcode != 0:
+            print(f"===================== !!!!!!!!!!!!!!! Error: Diffusion runner process {t.pid} exit abnormally with code: {t.exitcode}")
+
+    for device_id in range(1, parallel_cnt+1):
+        start_idx = (device_id-1) * len(novel_viewpoint_stack) // parallel_cnt
+        end_idx = device_id * len(novel_viewpoint_stack) // parallel_cnt
+        for i in range(start_idx, end_idx):
+            novel_viewpoint_stack[i].meta['diffusion_original_image'] = return_dict[device_id][i-start_idx].to('cuda', non_blocking=True)
 
 
 def training():
@@ -98,8 +162,6 @@ def training():
     train_viewpoint_stack: List[Camera] = scene.getTrainCameras().copy()
     viewpoint_stack += train_viewpoint_stack
     # Move training images to GPU
-    for viewpoint in train_viewpoint_stack:
-        viewpoint.set_device('cuda')
 
     training_camera_number = len(viewpoint_stack)
 
@@ -107,6 +169,12 @@ def training():
     max_scale = max(diffusion_args.sample_scales)
     min_iteration = min(diffusion_args.sample_iterations)
     max_iteration = max(diffusion_args.sample_iterations)
+
+    for viewpoint in train_viewpoint_stack:
+        viewpoint.set_device('cuda')
+    if cfg.diffusion_parallel == 0:
+        for viewpoint in scene.getNovelViewCameras():
+            viewpoint.set_device('cuda')
 
     # Perform the actual training procedure
     for iteration in range(start_iter, training_args.iterations + 1):
@@ -127,7 +195,21 @@ def training():
 
                 scale = (min_scale - max_scale) * (iteration - restarting - min_iteration) / (max_iteration - min_iteration) + max_scale
 
-                diffusion_result = diffusion_runner.run(novel_viewpoint_stack, train_viewpoint_stack, use_render=True, scale=scale, masked_guidance=iteration >= cfg.diffusion.masked_guidance_iter)  # type: ignore
+                if cfg.diffusion_parallel == 0:
+                    # 在主进程中同时进行3DGS和diffusion推理
+                    diffusion_result = diffusion_runner.run(novel_viewpoint_stack, train_viewpoint_stack, scene.dataset.getmeta('obj_meta'), use_render=True, scale=scale, masked_guidance=iteration >= cfg.diffusion.masked_guidance_iter)  # type: ignore
+                else:
+                    # 使用多进程进行 diffusion 推理，主进程仅用于3DGS，diffusion不占用3dgs内存
+                    # 先保存checkpoint，多进程从checkpoint加载，这种实现方法简单很多
+                    # 必须确保可用的GPU数==cfg.diffusion_parallel+1，每个diffusion 推理进程独占一个GPU，主进程3DGS占用一个GPU
+                    state_dict = gaussians.save_state_dict(is_final=(iteration == training_args.iterations))
+                    state_dict['iter'] = iteration + 1
+                    ckpt_path = os.path.join(cfg.trained_model_dir, f'iteration_{iteration}.pth')
+                    torch.save(state_dict, ckpt_path)
+
+                    # 创建diffusion多进程，各进程内部重新加载scene和train_viewpoint，这仍会占用较多内存。
+                    # novel_viewpoint 则按显卡划分
+                    create_diffusion_inference_processes(cfg.diffusion_parallel,scene,scene.dataset.getmeta('obj_meta'),novel_viewpoint_stack,scale,iteration)
 
                 # Move training images to GPU
                 viewpoint_stack: List[Camera] = []  # remove the previous sampling results
