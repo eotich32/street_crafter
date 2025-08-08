@@ -12,7 +12,9 @@ from street_gaussian.utils.camera_utils import Camera
 from video_diffusion.sample_condition import VideoDiffusionModel
 
 from easyvolcap.utils.console_utils import *
-
+from src_for_diffusion.LidarPainter import LidarPintoraConvIn
+import torchvision
+import torchvision.transforms.functional as F
 
 class DiffusionRunner():
     def __init__(self, scene: Scene):
@@ -120,8 +122,8 @@ class WaymoDiffusionRunner(DiffusionRunner):
     def __init__(self, scene: Scene):
         super(WaymoDiffusionRunner, self).__init__(scene)
 
-    def run(self, cameras: List[Camera], train_cameras: List[Camera], obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
-        cameras = [camera for camera in cameras if camera.meta['cam'] == 0]  # Front camera
+    def run(self, cameras: List[Camera], train_cameras: List[Camera], use_render=True, scale: float = 0.3, masked_guidance: bool = False):
+        cameras = [camera for camera in cameras if camera.meta['cam'] == 0 or camera.meta['cam'] == 1 or camera.meta['cam'] == 2]  # 3 camera
         diffusion_results = []
 
         novel_view_ids = list(set([camera.meta['novel_view_id'] for camera in cameras]))
@@ -308,27 +310,31 @@ class WaymoDiffusionRunner(DiffusionRunner):
                 batch['training_free_guidance'] = False
                 batch['masked_guidance'] = False
             print(guide_seq_path_sample)
-            diffusion_output = self.scene.diffusion.forward(batch, scale, cond_indices=[0])  # type: ignore
-            diffusion_result[start_idx:end_idx] = diffusion_output[1:]  # (f, 3, h, w)
+            #diffusion_output = self.scene.diffusion.forward(batch, scale, cond_indices=[0])  # type: ignore
+            #diffusion_result[start_idx:end_idx] = diffusion_output[1:]  # (f, 3, h, w)
             filled[start_idx:end_idx] = True
 
         assert filled.all(), 'Not all frames are passed through the prior'
 
         for i, camera in enumerate(cameras):
-            camera.meta['diffusion_original_image'] = diffusion_result[i].float().to('cuda', non_blocking=True)
-            if cfg.diffusion.get('save_diffusion_render', True):
-                diffusion_image = (diffusion_result[i].permute(1, 2, 0) * 255).byte().cpu().numpy()
-                diffusion_image = cv2.cvtColor(diffusion_image, cv2.COLOR_RGB2BGR)
+            #camera.meta['diffusion_original_image'] = diffusion_result[i].float().to('cuda', non_blocking=True)
+            if cfg.diffusion.get('save_diffusion_render', True) and '2.0' in camera.image_name and '-2.0' not in camera.image_name: #>>>>使用2.0用于数据处理
+                #diffusion_image = (diffusion_result[i].permute(1, 2, 0) * 255).byte().cpu().numpy()
+                #diffusion_image = cv2.cvtColor(diffusion_image, cv2.COLOR_RGB2BGR)
 
                 # Modify the guidance_rgb_path
                 diffusion_save_dir = os.path.join(cfg.model_path, 'diffusion')
                 os.makedirs(diffusion_save_dir, exist_ok=True)
                 save_path = os.path.join(diffusion_save_dir, camera.image_name)
                 save_path = save_path + '.png' if '.png' not in save_path else save_path
-                save_path = save_path.replace('.png', f'_scale{scale}.png') if scale < 1.0 else save_path
-                
-                if scale == 1.0 or scale == 0.3:
-                    cv2.imwrite(save_path, diffusion_image)
+                #save_path = save_path.replace('.png', f'_scale{scale}.png') if scale < 1.0 else save_path
+                diff_img = cv2.imread(save_path)
+                #diff_img = cv2.resize(diff_img, (1024, 576), interpolation=cv2.INTER_LANCZOS4)   #>>>>数据处理尺度对齐
+                diff_img = cv2.cvtColor(diff_img, cv2.COLOR_BGR2RGB)
+                image_tensor = torch.from_numpy(diff_img).permute(2, 0, 1).float() / 255.0 
+                camera.meta['diffusion_original_image'] = image_tensor.to('cuda', non_blocking=True)
+                #if scale == 1.0 or scale == 0.3:
+                #cv2.imwrite(save_path, diffusion_image)
                 # original_path = camera.meta['guidance_rgb_path']
                 # modified_path = original_path.replace('color', 'prior')
                 # modified_path = modified_path.replace('.png', f'_scale{scale}.png')
@@ -340,6 +346,148 @@ class WaymoDiffusionRunner(DiffusionRunner):
 
         return diffusion_result
 
+class ImageDiffusionRunner():
+    def __init__(self, scene: Scene):
+        self.scene: Scene = scene
+        assert self.scene.diffusion is None, 'Should not load video diffusion model'
+        assert self.scene.pointcloud_processor is not None, 'Pointcloud processor is not found'
+
+        self.target_height = cfg.diffusion.height
+        self.target_width = cfg.diffusion.width
+
+        self.renderer = StreetGaussianRenderer()
+
+        self.guide_preprocessor = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Lambda(lambda x: x * 2.0 - 1.0)
+        ])
+
+        self.default_preprocessor = transforms.Compose([
+            transforms.ToTensor(),
+        ])
+
+        self.diff_model = LidarPintoraConvIn(pretrained_path=cfg.diffusion.img_ckpt)
+        self.diff_model.set_eval()
+        print("Image DIffusion Model Loaded")
+
+    def get_diffusion(self):
+        return self.scene.diffusion
+
+    def get_gaussian(self):
+        return self.scene.gaussians
+
+    def get_pointcloud_processor(self):
+        return self.scene.pointcloud_processor
+
+    def get_render(self, cameras: List[Camera]):
+        render_result = dict()
+        render_result['render_seq'] = []
+        render_result['render_mask_seq'] = []
+
+        # for idx, camera in enumerate(tqdm(cameras, desc="Rendering Trajectory")):
+        for idx, camera in enumerate(cameras):
+            result = self.renderer.render_novel_view(camera, self.get_gaussian())
+            render_result['render_seq'].append(result['rgb'])
+            render_result['render_mask_seq'].append(result['acc'])
+        render_result['render_seq'] = torch.stack(render_result['render_seq'], dim=0)
+        render_result['render_mask_seq'] = torch.stack(render_result['render_mask_seq'], dim=0)
+
+        return render_result
+
+    def get_guidance(self, cameras: List[Camera]):
+        pointcloud_processor = self.get_pointcloud_processor()
+        pointcloud_processor.render_conditions(cameras, self.scene.dataset.getmeta('obj_meta'))  # type: ignore
+        guide_rgb_path = []
+        guide_mask_path = []
+        for camera in cameras:
+            assert os.path.exists(camera.meta['guidance_rgb_path'])
+            assert os.path.exists(camera.meta['guidance_mask_path'])
+            guide_rgb_path.append(camera.meta['guidance_rgb_path'])
+            guide_mask_path.append(camera.meta['guidance_mask_path'])
+
+        return guide_rgb_path, guide_mask_path
+
+    def preprocess_image(self, image_path, preprocessor):
+        image = Image.open(image_path)
+        ori_w, ori_h = image.size
+        if ori_w / ori_h > self.target_width / self.target_height:
+            tmp_w = int(self.target_width / self.target_height * ori_h)
+            left = (ori_w - tmp_w) // 2
+            right = (ori_w + tmp_w) // 2
+            image = image.crop((left, 0, right, ori_h))
+        elif ori_w / ori_h < self.target_width / self.target_height:
+            tmp_h = int(self.target_height / self.target_width * ori_w)
+            top = ori_h - tmp_h
+            bottom = ori_h
+            # top = (ori_h - tmp_h) // 2
+            # bottom = (ori_h + tmp_h) // 2
+            image = image.crop((0, top, ori_w, bottom))
+        image = image.resize((self.target_width, self.target_height), resample=Image.LANCZOS)
+        if not image.mode == "RGB":
+            image = image.convert("RGB")
+        image = preprocessor(image)
+        return image
+
+    def preprocess_tensor(self, image_tensor):
+        ori_h, ori_w = image_tensor.shape[-2:]
+
+        if ori_w / ori_h > self.target_width / self.target_height:
+            tmp_w = int(self.target_width / self.target_height * ori_h)
+            left = (ori_w - tmp_w) // 2
+            right = (ori_w + tmp_w) // 2
+            image_tensor = image_tensor[..., :, left:right]
+        elif ori_w / ori_h < self.target_width / self.target_height:
+            tmp_h = int(self.target_height / self.target_width * ori_w)
+            top = ori_h - tmp_h
+            bottom = ori_h
+            image_tensor = image_tensor[..., top:bottom, :]
+
+        transform_resize = transforms.Resize((self.target_height, self.target_width))
+        image_tensor = transform_resize(image_tensor)
+        return image_tensor
+
+    def run(self, cameras: List[Camera], train_cameras: List[Camera], use_render=True, scale: float = 0.3, masked_guidance: bool = False):
+        cameras = [camera for camera in cameras if camera.meta['cam'] == 0 or camera.meta['cam'] == 1 or camera.meta['cam'] == 2]  # 3 camera
+        diffusion_results = []
+        diffusion_save_dir = os.path.join(cfg.model_path, 'diffusion')
+        os.makedirs(diffusion_save_dir, exist_ok=True)
+        img_trans = transforms.ToPILImage()
+        for camera in tqdm(cameras, desc='Running Image Diffusion'):
+            #print(">>>", camera.meta['guidance_rgb_path'], camera.meta['guidance_mask_path'])
+            render_result = self.renderer.render_novel_view(camera, self.get_gaussian())['rgb'].detach()
+            #input_image = img_trans(render_result)
+            #input_image = Image.open(args.input_image).convert('RGB')
+            ref_image = Image.open(camera.meta['guidance_rgb_path']).convert('RGB')
+            #input_image = input_image.crop((0, 166, 1600, 1066))
+            #ref_image = ref_image.crop((0, 166, 1600, 1066))   #waymo数据集需要统一尺寸
+            #new_width = 1024; new_height = 576
+            #input_image = input_image.resize((new_width, new_height), Image.LANCZOS)
+            #ref_image = ref_image.resize((new_width, new_height), Image.LANCZOS)
+
+            with torch.no_grad():
+                #c_t = F.to_tensor(input_image).unsqueeze(0).cuda()
+                #c_ref = F.to_tensor(ref_image).unsqueeze(0).cuda()
+                c_t = self.preprocess_tensor(render_result).unsqueeze(0).cuda()
+                c_ref = self.preprocess_tensor(F.to_tensor(ref_image)).unsqueeze(0).cuda()
+                ref_mask = torch.any(c_ref > 0.20, dim=1, keepdim=True).float()
+
+                lidar_region = c_ref * ref_mask
+                source_region = c_t * (1 - ref_mask)
+                x_combined = lidar_region + source_region
+
+                output_image = self.diff_model(c_t, x_combined, "picture of urban street scene")
+                camera.meta['diffusion_original_image'] = output_image[0]* 0.5 + 0.5
+                output_pil = img_trans(output_image[0].cpu() * 0.5 + 0.5)
+                ref_pil = img_trans(x_combined[0].cpu())
+
+            save_path = os.path.join(diffusion_save_dir, camera.image_name)
+            save_path = save_path + '.png' if '.png' not in save_path else save_path
+            #torchvision.utils.save_image(render_result, save_path)
+            output_pil.save(save_path)
+            ref_pil.save(save_path.replace('.png', '_ref.png'))
+            #assert "000020" not in camera.image_name, "Debug"
+
+        return diffusion_results # empty list 
 
 DiffusionRunnerType = {
     "Waymo": WaymoDiffusionRunner,
@@ -348,4 +496,7 @@ DiffusionRunnerType = {
 
 
 def getDiffusionRunner(scene: Scene):
-    return DiffusionRunnerType[cfg.data.type](scene)
+    if cfg.diffusion.use_img_diffusion:
+        return ImageDiffusionRunner(scene)
+    else:
+        return DiffusionRunnerType[cfg.data.type](scene)
