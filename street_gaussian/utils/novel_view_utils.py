@@ -16,6 +16,8 @@ from data_processor.pandaset_processor.pandaset_helpers import get_lane_shift_di
 from data_processor.pandaset_processor.pandaset_helpers import LANE_SHIFT_SIGN as LANE_SHIFT_SIGN_PANDASET
 from data_processor.waymo_processor.waymo_helpers import get_lane_shift_direction as get_lane_shift_direction_waymo
 from data_processor.waymo_processor.waymo_helpers import LANE_SHIFT_SIGN as LANE_SHIFT_SIGN_WAYMO
+from street_gaussian.config import cfg
+from street_gaussian.utils.general_utils import matrix_to_quaternion_numpy, quaternion_to_matrix_numpy
 
 from easyvolcap.utils.console_utils import *
 
@@ -27,25 +29,199 @@ def affine_inverse(A: np.ndarray):
     return np.concatenate([np.concatenate([R.T, -R.T @ T], axis=-1), P], axis=-2)
 
 
+# 四元数Slerp实现
+def quaternion_slerp(q1, q2, t):
+    """
+    四元数球面线性插值
+    q1, q2: 四元数 [w, x, y, z]
+    t: 插值参数 [0, 1]
+    """
+    # 确保四元数方向一致
+    if np.dot(q1, q2) < 0:
+        q1 = -q1
+
+    # 计算点积
+    dot = np.dot(q1, q2)
+
+    # 处理非常接近的四元数，避免数值不稳定
+    if dot > 0.9995:
+        result = q1 + t * (q2 - q1)
+        return result / np.linalg.norm(result)
+
+    # 确保点积在有效范围内
+    dot = max(min(dot, 1.0), -1.0)
+
+    # 计算夹角
+    theta_0 = math.acos(dot)
+    theta = theta_0 * t
+
+    # 计算插值系数
+    q3 = q2 - q1 * dot
+    q3_norm = np.linalg.norm(q3)
+
+    # 避免除以零
+    if q3_norm < 1e-10:
+        return q1
+
+    q3 = q3 / q3_norm
+
+    # 执行Slerp插值
+    return q1 * math.cos(theta) + q3 * math.sin(theta)
+
+
+def interpolate_novel_views(cameras, interpolation_points):
+    novel_views = []
+    skip_count = 0
+
+    # 检查相机数量，至少需要2个相机才能进行插值
+    if len(cameras) < 2:
+        print("警告: 相机数量不足，无法进行插值")
+        novel_views = cameras.copy()
+    else:
+        for i in range(len(cameras) - 1):
+            # 获取相邻的两个相机位姿
+            cam1 = cameras[i]
+            cam2 = cameras[i + 1]
+
+            # 获取位姿信息
+            meta1 = cam1.metadata
+            meta2 = cam2.metadata
+
+            ego_pose1 = meta1['ego_pose'].copy()
+            ego_pose2 = meta2['ego_pose'].copy()
+
+            ext1 = meta1['extrinsic'].copy()
+            ext2 = meta2['extrinsic'].copy()
+
+            # 在两个位姿之间进行插值
+            for j in range(1, interpolation_points + 1):
+                t = j / (interpolation_points + 1)  # 插值比例
+
+                # 线性插值生成新的ego_pose平移部分
+                novel_ego_pose = ego_pose1.copy()
+                novel_ego_pose[:3, 3] = (1 - t) * ego_pose1[:3, 3] + t * ego_pose2[:3, 3]
+
+                # 使用四元数Slerp进行旋转插值
+                rot1 = ego_pose1[:3, :3]
+                rot2 = ego_pose2[:3, :3]
+
+                # 转换旋转矩阵为四元数
+                q1 = matrix_to_quaternion_numpy(rot1)
+                q2 = matrix_to_quaternion_numpy(rot2)
+
+                # 执行Slerp插值
+                q_interp = quaternion_slerp(q1, q2, t)
+
+                # 转换回旋转矩阵
+                rot_interp = quaternion_to_matrix_numpy(q_interp)
+
+                # 更新ego_pose中的旋转部分
+                novel_ego_pose[:3, :3] = rot_interp
+
+                # 插值外参
+                novel_ext = (1 - t) * ext1 + t * ext2
+
+                # 计算相机矩阵
+                c2w = novel_ego_pose @ novel_ext
+                RT = affine_inverse(c2w)
+                R = RT[:3, :3].T
+                T = RT[:3, 3]
+
+                # 创建新的相机对象
+                novel_view_camera = copy.copy(cam1)
+                novel_view_camera = novel_view_camera._replace(metadata=copy.copy(cam1.metadata))
+
+                # 生成新的图像名称
+                image_name = cam1.image_name
+                frame = meta1['frame']
+                cam_id = meta1['cam']
+
+                # 创建新视角路径
+                tag = f'_interp_{i}_{j}'
+                novel_view_dir = os.path.join(cfg.source_path, 'lidar', f'color_render{tag}')
+                novel_view_image_name = f'{image_name}{tag}.png'
+
+                metadata = novel_view_camera.metadata
+                metadata['is_novel_view'] = True
+                # metadata['novel_view_id'] = f'interp_{i}_{j}'
+                metadata['ego_pose'] = novel_ego_pose
+                metadata['extrinsic'] = novel_ext
+
+                # 更新帧号为插值位置
+                metadata['frame'] = int(frame + t * (meta2['frame'] - frame))
+
+                novel_view_rgb_path = os.path.join(novel_view_dir, f'{str(metadata["frame"]).zfill(6)}_{cam_id}.png')
+                novel_view_mask_path = os.path.join(novel_view_dir,
+                                                    f'{str(metadata["frame"]).zfill(6)}_{cam_id}_mask.png')
+
+                metadata['guidance_rgb_path'] = novel_view_rgb_path
+                metadata['guidance_mask_path'] = novel_view_mask_path
+
+                # 更新相机对象
+                novel_view_camera = novel_view_camera._replace(
+                    image_name=novel_view_image_name, R=R, T=T, guidance=dict(), metadata=metadata)
+
+                novel_views.append(novel_view_camera)
+
+        # 添加原始相机位姿
+        novel_views.extend(cameras)
+    return novel_views
+
+
+def build_rotation_matrix(rotations):
+    out = np.eye(3)
+    for r in rotations:
+        c, s = math.cos(r['rotate']), math.sin(r['rotate'])
+        if r['axis'] == 'y':
+            out = out.dot(np.array([
+                [c, 0, -s],
+                [0, 1, 0],
+                [s, 0, c]
+            ]))
+        elif r['axis'] == 'x':
+            out = out.dot(np.array([
+                [1, 0, 0],
+                [0, c, -s],
+                [0, s, c]
+            ]))
+        else:  # z
+            out = out.dot(np.array([
+                [c, -s, 0],
+                [s, c, 0],
+                [0, 0, 1]
+            ]))
+    return out
+
+
+def build_img_id(mode):
+    tag = ''
+    if mode['shift'] != 0: tag += f'_shift_{mode["shift"]:.2f}'
+    for r in mode['rotations']:
+        tag += f'_rotate_{r["axis"]}_{int(r["rotate"])}'
+    return tag
+
+
 def waymo_novel_view_cameras(cameras: List[CameraInfo], ego_frame_poses, obj_info, camera_tracklets):
-    from street_gaussian.config import cfg
     modes = []
     
     shifts = cfg.render.novel_view.shift if isinstance(cfg.render.novel_view.shift, list) else [cfg.render.novel_view.shift]
     if cfg.mode == 'train':
         shifts = [x for x in shifts if x != 0]
     for shift in shifts:
-        modes.append({'shift': shift, 'rotate': 0.0})
+        modes.append({'shift': shift, 'rotations': [{'axis':'z', 'rotate': 0.0}]})
     # rotates = cfg.render.novel_view.rotate if isinstance(cfg.render.novel_view.rotate, list) else [cfg.render.novel_view.rotate]
     # rotates = [x for x in rotates if x != 0]
     # for rotate in rotates:
     #     modes.append({'shift': 0, 'rotate': rotate})
+    # modes.append({'shift':50, 'custom':True, 'rotations': [{'axis': 'y','rotate': -90}]})
+    # modes.append({'shift':50, 'custom':True, 'rotations': [{'axis': 'y','rotate': -45}]})
+    # modes.append({'shift':20, 'custom':True, 'rotations': [{'axis': 'x','rotate': -45}, {'axis': 'y','rotate': -45}]})
+    # modes.append({'shift':20, 'custom':True, 'rotations': [{'axis': 'x','rotate': 45}, {'axis': 'y','rotate': -45}]})
 
     novel_view_cameras = []
     skip_count = 0
     
-    cameras = [camera for camera in cameras if camera.metadata['cam'] == 0]  # only consider the FRONT camera (whose cam_idx is marked as 0)
-
+    cameras = [camera for camera in cameras if camera.metadata['cam'] in [0,1,2]]  # only consider the FRONT camera (whose cam_idx is marked as 0)
     pbar = tqdm(total=len(cameras) * len(modes), desc='Making novel view cameras')
     for i, mode in enumerate(modes):
         for camera in cameras:
@@ -55,16 +231,13 @@ def waymo_novel_view_cameras(cameras: List[CameraInfo], ego_frame_poses, obj_inf
             image_name = novel_view_camera.image_name
 
             # make novel view path
-            shift, rotate = mode['shift'], mode['rotate']
-            tag = ''
-            if shift != 0: tag += f'_shift_{shift:.2f}'
-            if rotate != 0: tag += f'_rotate_{rotate:.2f}'
-            
+            shift = mode['shift']
+            tag = build_img_id(mode)
             novel_view_dir = os.path.join(cfg.source_path, 'lidar', f'color_render{tag}')
             novel_view_image_name = f'{image_name}{tag}.png'
             metadata = novel_view_camera.metadata
             metadata['is_novel_view'] = True
-            metadata['novel_view_id'] = shift
+            metadata['novel_view_id'] = tag
             cam, frame = metadata['cam'], metadata['frame']
             novel_view_rgb_path = os.path.join(novel_view_dir, f'{str(frame).zfill(6)}_{cam}.png')
             novel_view_mask_path = os.path.join(novel_view_dir, f'{str(frame).zfill(6)}_{cam}_mask.png')
@@ -77,13 +250,15 @@ def waymo_novel_view_cameras(cameras: List[CameraInfo], ego_frame_poses, obj_inf
             frame = metadata['frame']
 
             # shift
-            shift_direction = get_lane_shift_direction_waymo(ego_frame_poses, frame)
-            scene_idx = os.path.split(cfg.source_path)[-1]
-            ego_pose[:3, 3] += shift_direction * shift * LANE_SHIFT_SIGN_WAYMO[scene_idx]
+            if 'custom' in mode.keys():
+                ego_pose[2, 3] += shift
+            else:
+                shift_direction = get_lane_shift_direction_waymo(ego_frame_poses, frame)
+                scene_idx = os.path.split(cfg.source_path)[-1]
+                ego_pose[:3, 3] += shift_direction * shift * LANE_SHIFT_SIGN_WAYMO[scene_idx]
 
             # rotate
-            c, s = math.cos(rotate), math.sin(rotate)
-            rot = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+            rot = build_rotation_matrix(mode['rotations'])
             ego_pose[:3, :3] = rot @ ego_pose[:3, :3]
 
             c2w = ego_pose @ ext
@@ -114,7 +289,6 @@ def waymo_novel_view_cameras(cameras: List[CameraInfo], ego_frame_poses, obj_inf
 
             skip_count += skip_camera
             novel_view_camera.metadata['skip_camera'] = skip_camera  # will skip camera for training if this is present
-
             pbar.update()
 
     novel_view_cameras = sorted(novel_view_cameras, key=lambda x: x.uid)

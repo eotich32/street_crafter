@@ -19,6 +19,7 @@ import sys
 import cv2
 from datetime import datetime
 from PIL import Image
+import math
 
 def inverse_sigmoid(x):
     return torch.log(x / (1 - x))
@@ -98,6 +99,42 @@ def strip_lowerdiag(L):
 
 def strip_symmetric(sym):
     return strip_lowerdiag(sym)
+
+
+def matrix_to_quaternion_numpy(matrix):
+    """
+    将旋转矩阵转换为四元数表示
+    """
+    # 从旋转矩阵计算四元数
+    trace = matrix[0, 0] + matrix[1, 1] + matrix[2, 2]
+
+    if trace > 0:
+        s = 0.5 / math.sqrt(trace + 1.0)
+        w = 0.25 / s
+        x = (matrix[2, 1] - matrix[1, 2]) * s
+        y = (matrix[0, 2] - matrix[2, 0]) * s
+        z = (matrix[1, 0] - matrix[0, 1]) * s
+    else:
+        if matrix[0, 0] > matrix[1, 1] and matrix[0, 0] > matrix[2, 2]:
+            s = 2.0 * math.sqrt(1.0 + matrix[0, 0] - matrix[1, 1] - matrix[2, 2])
+            w = (matrix[2, 1] - matrix[1, 2]) / s
+            x = 0.25 * s
+            y = (matrix[0, 1] + matrix[1, 0]) / s
+            z = (matrix[0, 2] + matrix[2, 0]) / s
+        elif matrix[1, 1] > matrix[2, 2]:
+            s = 2.0 * math.sqrt(1.0 + matrix[1, 1] - matrix[0, 0] - matrix[2, 2])
+            w = (matrix[0, 2] - matrix[2, 0]) / s
+            x = (matrix[0, 1] + matrix[1, 0]) / s
+            y = 0.25 * s
+            z = (matrix[1, 2] + matrix[2, 1]) / s
+        else:
+            s = 2.0 * math.sqrt(1.0 + matrix[2, 2] - matrix[0, 0] - matrix[1, 1])
+            w = (matrix[1, 0] - matrix[0, 1]) / s
+            x = (matrix[0, 2] + matrix[2, 0]) / s
+            y = (matrix[1, 2] + matrix[2, 1]) / s
+            z = 0.25 * s
+
+    return np.array([w, x, y, z])
 
 
 def quaternion_to_matrix_numpy(r):

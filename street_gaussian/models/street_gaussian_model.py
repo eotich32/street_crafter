@@ -98,6 +98,13 @@ class StreetGaussianModel(nn.Module):
 
         PlyData(plydata_list).write(path)
 
+    def save_ply_only_background(self, path):
+        mkdir_p(os.path.dirname(path))
+        model: GaussianModel = getattr(self, 'background')
+        plydata = model.make_ply()
+        el = PlyElement.describe(plydata, 'vertex')
+        PlyData([el]).write(path)
+
     def load_ply(self, path):
         plydata_list = PlyData.read(path).elements
         for plydata in plydata_list:

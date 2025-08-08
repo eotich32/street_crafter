@@ -4,9 +4,11 @@ from street_gaussian.utils.camera_utils import cameraList_from_camInfos
 from street_gaussian.config import cfg
 from street_gaussian.datasets.base_readers import SceneInfo
 from street_gaussian.datasets.waymo_readers import readWaymoInfo
+from street_gaussian.datasets.colmap_readers import readColmapSceneInfo
 
 sceneLoadTypeCallbacks = {
     "Waymo": readWaymoInfo,
+    "Colmap": readColmapSceneInfo,
 }
 
 
