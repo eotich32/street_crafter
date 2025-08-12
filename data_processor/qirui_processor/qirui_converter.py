@@ -789,20 +789,17 @@ def load_lidar_2_imu(raw_dir):
 
 
 if __name__ == '__main__':
-    # import pickle
-    # with open(r"D:\Projects\3dgs_datas\dataset\horizon\notr\track/track_camera_visible.pkl", 'wb') as f:
-    #     pickle.dump(dict(), f)
-    # with open(r"D:\Projects\3dgs_datas\dataset\horizon\notr\track/track_info.pkl", 'wb') as f:
-    #     pickle.dump(dict(), f)
-    # with open(r"D:\Projects\3dgs_datas\dataset\horizon\notr\track/trajectory.pkl", 'wb') as f:
-    #     pickle.dump(dict(), f)
-    with open(r'D:\Projects\51sim-ai\EmerNeRF\data\waymo\processed\street_crafter_049\track\track_camera_visible.pkl', 'rb') as f:
-        track_info = pickle.load(f)
-        track_info = track_info
-    with open(r'D:\Projects\51sim-ai\EmerNeRF\data\waymo\processed\street_crafter_049\track\track_ids.json', 'r') as f:
-        object_ids = json.load(f)
-        object_ids = bidict(object_ids)
-        object_ids = object_ids
+    # with open(r'D:\Projects\51sim-ai\EmerNeRF\data\waymo\processed\street_crafter_049\interpolated_track\track_info.pkl', 'rb') as f:
+    #     track_info = pickle.load(f)
+    #     track_info = track_info
+    # with open(r'D:\Projects\51sim-ai\EmerNeRF\data\waymo\processed\street_crafter_049\interpolated_track\track_camera_visible.pkl', 'rb') as f:
+    #     track_camera_visible = pickle.load(f)
+    #     track_camera_visible = track_camera_visible
+    # with open(r'D:\Projects\51sim-ai\EmerNeRF\data\waymo\processed\street_crafter_049\interpolated_track\trajectory.pkl', 'rb') as f:
+    #     trajectory = pickle.load(f)
+    #     trajectory = trajectory
+    # from waymo_processor.waymo_helpers import load_track, load_camera_info
+    # intrinsics, extrinsics, ego_frame_poses, ego_cam_poses = load_camera_info(r'D:\Projects\51sim-ai\EmerNeRF\data\waymo\processed\street_crafter_049')
 
     raw_dir = r'D:\Projects\3dgs_datas\dataset\qirui\raw'
     output_dir = r'D:\Projects\3dgs_datas\dataset\qirui\notr'
@@ -826,10 +823,6 @@ if __name__ == '__main__':
     os.makedirs(lidar_background_dir, exist_ok=True)
     os.makedirs(lidar_actor_dir, exist_ok=True)
     os.makedirs(lidar_cond_dir, exist_ok=True)
-
-    track_camera_visible_path = os.path.join(track_dir, 'track_camera_visible.pkl')
-    with open(track_camera_visible_path, 'rb') as f:
-        track_camera_visible = pickle.load(f)
 
     lidar_2_cameras = load_lidar_2_cameras(raw_dir)
     lidar_2_imu = load_lidar_2_imu(raw_dir)
