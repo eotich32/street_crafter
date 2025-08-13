@@ -29,7 +29,7 @@ from utils.box_utils import bbox_to_corner3d, inbbox_points
 from bidict import bidict
 
 
-camera_names = ['front_main','left_front','right_front','left_rear','right_rear']
+camera_names = ['left_rear','left_front','front_main','right_front','right_rear', 'rear_main']
 camera_name_2_id = {c:i for i,c in enumerate(camera_names)}
 # intrinsics = {
 #     'front_main': {'w': 1749, 'h': 1060, 'fx': 7332.73165922591, 'fy': 7329.88657415548, 'cx': 1938.66601342433, 'cy': 1088.49275453309},
@@ -39,11 +39,12 @@ camera_name_2_id = {c:i for i,c in enumerate(camera_names)}
 #     'right_rear': {'w': 1541, 'h': 849, 'fx': 680.1104967755755, 'fy': 673.4213417751372, 'cx': 770.5,'cy': 424.5},
 # }
 qirui_name_2_notr_name = {
-    'front_main': 'FRONT'
-    ,'left_front': 'FRONT_LEFT'
-    ,'right_front': 'FRONT_RIGHT'
-    ,'left_rear': 'SIDE_LEFT'
-    ,'right_rear': 'SIDE_RIGHT'
+    'left_rear': 'REAR_LEFT',
+    'left_front': 'FRONT_LEFT',
+    'front_main': 'FRONT',
+    'right_front': 'FRONT_RIGHT',
+    'right_rear': 'REAR_RIGHT',
+    'rear_main': 'REAR_MAIN',
 }
 
 
@@ -106,11 +107,14 @@ def extract_camera_intrinsics(frame_infos):
 
 def extract_camera_extrinsics(frame_infos):
     camera_exntrinsics = {}
+    rot2camera = Rotation.from_euler('yx', [90, -90], degrees=True).inv().as_matrix()
     for cam in camera_names:
         sensor_id = frame_infos['mapping'][cam]
-        extrinsic = frame_infos['calibration'][sensor_id]['extrinsic']
-        # extrinsic = np.matmul(extrinsic, opencv2camera)
-        camera_exntrinsics[cam] = np.array(extrinsic)
+        extrinsic_lidar2camera = frame_infos['calibration'][sensor_id]['extrinsic']
+        camera2lidar = np.linalg.inv(np.array(extrinsic_lidar2camera))
+        camera_exntrinsics[cam] = camera2lidar
+        
+        print(f"[{cam}]position: {camera2lidar[:3, 3]}, rotation: {Rotation.from_matrix(camera2lidar[:3, :3] @ rot2camera).as_euler('zyx', degrees=True)}")
 
     for camera, ext in camera_exntrinsics.items():
         filename = str(camera_name_2_id[camera]) + '.txt'
@@ -482,16 +486,22 @@ def extra_ego_poses(filepath, frame_infos):
         raw_defines = json.load(f)
         all_ego_poses = {}
         timestamps = []
+        rot90_ego_pose = Rotation.from_euler('z', 90, degrees=True)
         # 创建查找器函数（仅排序一次）
         find_pose = create_nearest_pose_finder(all_ego_poses)
         for raw_define in raw_defines:
             ts = int(float(raw_define['timestamp'])*1000)
             position = raw_define['pose']['position']
-            orientation = raw_define['pose']['orientation']
+            euler_angles  = raw_define['pose']['euler_angles']
             posx,posy,posz = position['x'], position['y'], position['z']
-            w,x,y,z = orientation['qw'], orientation['qx'], orientation['qy'], orientation['qz']
             timestamps.append(ts)
-            all_ego_poses[ts] = pose_to_homogeneous_matrix(posx,posy,posz,w,x,y,z)
+            ego_pose = np.eye(4)
+            ego_pose[:3, 3] = [posx,posy,posz]
+            # Roll/pitch/yaw that represents a rotation with intrinsic sequence z-x-y.
+            # ref https://apollo.baidu.com/docs/apollo/latest/pose_8proto_source.html 
+            rotation_matrix = rot90_ego_pose * Rotation.from_euler('ZXY', [euler_angles['z'], euler_angles['y'], euler_angles['x']])
+            ego_pose[:3, :3] = rotation_matrix.as_matrix() 
+            all_ego_poses[ts] = ego_pose
         ego_poses = {} # 只需要取相机对应帧的主车轨迹。
         for frame in frame_infos['frames']:
             ts = ts_from_frame_name(frame['frame_name'])
@@ -777,6 +787,9 @@ def load_lidar_2_cameras(raw_dir):
     with open(os.path.join(raw_dir, 'extrinsics', 'lidar2camera', 'lidar2rightrear.yaml'), 'r') as f:
         config = yaml.safe_load(f)
         lidar_2_cameras['right_rear'] = np.array(config['transform'])
+    with open(os.path.join(raw_dir, 'extrinsics', 'lidar2camera', 'lidar2rearmain.yaml'), 'r') as f:
+        config = yaml.safe_load(f)
+        lidar_2_cameras['rear_main'] = np.array(config['transform'])
     return lidar_2_cameras
 
 
@@ -796,13 +809,13 @@ if __name__ == '__main__':
     #     pickle.dump(dict(), f)
     # with open(r"D:\Projects\3dgs_datas\dataset\horizon\notr\track/trajectory.pkl", 'wb') as f:
     #     pickle.dump(dict(), f)
-    with open(r'D:\Projects\51sim-ai\EmerNeRF\data\waymo\processed\street_crafter_049\track\track_camera_visible.pkl', 'rb') as f:
-        track_info = pickle.load(f)
-        track_info = track_info
-    with open(r'D:\Projects\51sim-ai\EmerNeRF\data\waymo\processed\street_crafter_049\track\track_ids.json', 'r') as f:
-        object_ids = json.load(f)
-        object_ids = bidict(object_ids)
-        object_ids = object_ids
+    # with open(r'D:\Projects\51sim-ai\EmerNeRF\data\waymo\processed\street_crafter_049\track\track_camera_visible.pkl', 'rb') as f:
+    #     track_info = pickle.load(f)
+    #     track_info = track_info
+    # with open(r'D:\Projects\51sim-ai\EmerNeRF\data\waymo\processed\street_crafter_049\track\track_ids.json', 'r') as f:
+    #     object_ids = json.load(f)
+    #     object_ids = bidict(object_ids)
+    #     object_ids = object_ids
 
     raw_dir = r'D:\Projects\3dgs_datas\dataset\qirui\raw'
     output_dir = r'D:\Projects\3dgs_datas\dataset\qirui\notr'
@@ -827,9 +840,9 @@ if __name__ == '__main__':
     os.makedirs(lidar_actor_dir, exist_ok=True)
     os.makedirs(lidar_cond_dir, exist_ok=True)
 
-    track_camera_visible_path = os.path.join(track_dir, 'track_camera_visible.pkl')
-    with open(track_camera_visible_path, 'rb') as f:
-        track_camera_visible = pickle.load(f)
+    # track_camera_visible_path = os.path.join(track_dir, 'track_camera_visible.pkl')
+    # with open(track_camera_visible_path, 'rb') as f:
+    #     track_camera_visible = pickle.load(f)
 
     lidar_2_cameras = load_lidar_2_cameras(raw_dir)
     lidar_2_imu = load_lidar_2_imu(raw_dir)
@@ -838,7 +851,7 @@ if __name__ == '__main__':
     extrinsics = extract_camera_extrinsics(frame_infos)
     ego_poses = extra_ego_poses(os.path.join(raw_dir, 'localization.json'), frame_infos)
     intrinsics, distorted_w, distorted_h, images = extract_images(frame_infos, intrinsics, distcoeffs, raw_dir, img_dir, dynamic_mask_dir)
-    extract_dynamic_objs_and_draw_dynamic_masks(output_dir, dynamic_mask_dir, intrinsics, distorted_w, distorted_h, images, os.path.join(raw_dir, 'dynamic_obj', 'autolabel_10hz', 'clip_1746752396800.json'), track_dir)
+    # extract_dynamic_objs_and_draw_dynamic_masks(output_dir, dynamic_mask_dir, intrinsics, distorted_w, distorted_h, images, os.path.join(raw_dir, 'dynamic_obj', 'autolabel_10hz', 'clip_1746752396800.json'), track_dir)
     # generate_dynamic_masks(extrinsics, intrinsics, distorted_w, distorted_h, output_dir)
     # mask_images(r'D:\Projects\3dgs_datas\dataset\horizon\20240508/images', r'D:\Projects\3dgs_datas\dataset\horizon\20240508/mask_images', r'D:\Projects\3dgs_datas\dataset\horizon\20240508/masks')
-    extract_point_clounds(frame_infos, ego_poses, lidar_2_imu, lidar_2_cameras, extrinsics, intrinsics, distorted_w, distorted_h, img_dir, lidar_depth_dir, lidar_background_dir, lidar_actor_dir)
+    #extract_point_clounds(frame_infos, ego_poses, lidar_2_imu, lidar_2_cameras, extrinsics, intrinsics, distorted_w, distorted_h, img_dir, lidar_depth_dir, lidar_background_dir, lidar_actor_dir)
