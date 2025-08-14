@@ -13,21 +13,15 @@ def matrix_to_euler_xyz(matrix):
     translation_vector = matrix[:3, 3]
     return euler_angles, translation_vector
 
-
 def calculate_w2c(ego_pose, extrinsic):
-    OPENCV2DATASET = np.array(
+    opencv2camera = np.array( # from [right, down, forward] to [forward, left, up]
         [[0, 0, 1, 0], [-1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 0, 1]]
     )
-    # extrinsic = extrinsic @ OPENCV2DATASET
-    c2w = ego_pose @ extrinsic
-    # rot, pos = matrix_to_euler_xyz(c2w)
-    rot, pos = c2w[:3,:3], c2w[:3,3]
-    # rotationInverse = np.linalg.inv(Rotation.from_euler('zyx', rot, False).as_matrix())
-    rotationInverse = np.linalg.inv(rot)
-    pos = -rotationInverse.dot(pos)
-    q = Rotation.from_matrix(rotationInverse).as_quat()
-    w, x, y, z = q[3], q[0], q[1], q[2]
-    return w,x,y,z,pos
+    c2w = ego_pose @ extrinsic @ opencv2camera
+    w2c = np.linalg.inv(c2w)
+    rot, pos = w2c[:3,:3], w2c[:3,3]
+    q = Rotation.from_matrix(rot).as_quat()
+    return q[3], q[0], q[1], q[2], pos
 
 
 if __name__ == '__main__':

@@ -95,11 +95,11 @@ def load_track(seq_save_dir):
 # load ego pose and camera calibration(extrinsic and intrinsic)
 
 
-def load_ego_poses(datadir):
+def load_ego_poses(datadir, camera_count=5):
     ego_pose_dir = os.path.join(datadir, 'ego_pose')
 
     ego_frame_poses = []
-    ego_cam_poses = [[] for i in range(5)]
+    ego_cam_poses = [[] for i in range(camera_count)]
     ego_pose_paths = sorted(os.listdir(ego_pose_dir))
     for ego_pose_path in ego_pose_paths:
 
@@ -117,7 +117,7 @@ def load_ego_poses(datadir):
     center_point = np.mean(ego_frame_poses[:, :3, 3], axis=0)
     ego_frame_poses[:, :3, 3] -= center_point  # [num_frames, 4, 4]
 
-    ego_cam_poses = [np.array(ego_cam_poses[i]) for i in range(5)]
+    ego_cam_poses = [np.array(ego_cam_poses[i]) for i in range(camera_count)]
     ego_cam_poses = np.array(ego_cam_poses)
     ego_cam_poses[:, :, :3, 3] -= center_point  # [5, num_frames, 4, 4]
     return ego_frame_poses, ego_cam_poses
