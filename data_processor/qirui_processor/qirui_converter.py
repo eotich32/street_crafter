@@ -360,7 +360,7 @@ def extract_dynamic_objs_and_draw_dynamic_masks(output_dir, dynamic_mask_dir, in
                         if valid.any():
                             camera_visible.append(camera_name_2_id[camera_name])
                             track_camera_visible_cur_frame[camera_name_2_id[camera_name]].append(label_id)
-                        if valid.all() and camera_name in ['front_main', 'left_front', 'right_front']:
+                        if valid.all():
                             vertices = vertices.reshape(2, 2, 2, 2).astype(np.int32)
                             draw_3d_box_on_img(vertices, frame_images[camera_name_2_id[camera_name]], color=(255,0,0))
                             #draw_filled_3d_box_mask(dynamic_masks[camera_name_2_id[camera_name]], vertices)
