@@ -78,8 +78,11 @@ if __name__ == '__main__':
                     heights[camera_id], widths[camera_id] = image.shape[0], image.shape[1]
                 shutil.copyfile(source_img_path, dest_img_path)
                 source_mask_path = os.path.join(input_notr_dir, 'dynamic_mask', frame + '_' + camera_id + '.jpg')
-                dest_mask_path = os.path.join(output_masks_path, camera_names[int(camera_id)], frame + '_' + camera_id + '.jpg')
-                shutil.copyfile(source_mask_path, dest_mask_path)
+                dest_mask_path = os.path.join(output_masks_path, camera_names[int(camera_id)], frame + '_' + camera_id + '.png')
+                if os.path.exists(source_mask_path):
+                    image = cv2.imread(source_mask_path, cv2.IMREAD_GRAYSCALE)
+                    inverted_image = 255 - image
+                    cv2.imwrite(dest_mask_path, inverted_image)
                 f.write('{} {} {} {} {} {} {} {} {} {} \n\n'.format(i,w,x,y,z,pos[0], pos[1], pos[2],camera_id, img_name))
                 i = i+1
 
