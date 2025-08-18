@@ -25,15 +25,15 @@ segment_anything
 nvdiffrast @ git+https://github.com/NVlabs/nvdiffrast.git
 transforms3d
 
-pytorch-lightning==2.0.1
+pytorch-lightning>=2.0.1
 einops>=0.6.1
 omegaconf>=2.3.0
 clip @ git+https://github.com/openai/CLIP.git
 open-clip-torch>=2.20.0
-transformers==4.19.1
-torchdata==0.9.0
+transformers>=4.19.1
+torchdata>=0.9.0
 webdataset>=0.2.33
-xformers==0.0.27.post1
+xformers>=0.0.27.post1
 
 easyvolcap @ git+https://github.com/yunzhiy/EasyVolcap
 diff_point_rasterization @ git+https://github.com/yunzhiy/diff-point-rasterization

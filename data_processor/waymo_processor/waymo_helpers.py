@@ -98,14 +98,14 @@ def load_track(seq_save_dir, load_interpolated=True):
 # load ego pose and camera calibration(extrinsic and intrinsic)
 
 
-def load_ego_poses(datadir, load_interpolated=True):
+def load_ego_poses(datadir, load_interpolated=True, camera_count=5):
     if load_interpolated:
         ego_pose_dir = os.path.join(datadir, 'interpolated_ego_pose')
     else:
         ego_pose_dir = os.path.join(datadir, 'ego_pose')
 
     ego_frame_poses = []
-    ego_cam_poses = [[] for i in range(5)]
+    ego_cam_poses = [[] for i in range(camera_count)]
     ego_pose_paths = sorted(os.listdir(ego_pose_dir))
     for ego_pose_path in ego_pose_paths:
 
@@ -123,7 +123,7 @@ def load_ego_poses(datadir, load_interpolated=True):
     center_point = np.mean(ego_frame_poses[:, :3, 3], axis=0)
     ego_frame_poses[:, :3, 3] -= center_point  # [num_frames, 4, 4]
 
-    ego_cam_poses = [np.array(ego_cam_poses[i]) for i in range(5)]
+    ego_cam_poses = [np.array(ego_cam_poses[i]) for i in range(camera_count)]
     ego_cam_poses = np.array(ego_cam_poses)
     ego_cam_poses[:, :, :3, 3] -= center_point  # [5, num_frames, 4, 4]
     return ego_frame_poses, ego_cam_poses
@@ -152,11 +152,8 @@ def load_calibration(datadir):
 
 
 # load ego pose and camera calibration(extrinsic and intrinsic)
-def load_camera_info(datadir, load_interpolated=False):
-    if load_interpolated:
-        ego_pose_dir = os.path.join(datadir, 'interpolated_ego_pose')
-    else:
-        ego_pose_dir = os.path.join(datadir, 'ego_pose')
+def load_camera_info(datadir):
+    ego_pose_dir = os.path.join(datadir, 'ego_pose')
     extrinsics_dir = os.path.join(datadir, 'extrinsics')
     intrinsics_dir = os.path.join(datadir, 'intrinsics')
 

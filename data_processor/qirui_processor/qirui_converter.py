@@ -29,7 +29,7 @@ from utils.box_utils import bbox_to_corner3d, inbbox_points
 from bidict import bidict
 
 
-camera_names = ['front_main','left_front','right_front','left_rear','right_rear']
+camera_names = ['left_rear','left_front','front_main','right_front','right_rear', 'rear_main']
 camera_name_2_id = {c:i for i,c in enumerate(camera_names)}
 # intrinsics = {
 #     'front_main': {'w': 1749, 'h': 1060, 'fx': 7332.73165922591, 'fy': 7329.88657415548, 'cx': 1938.66601342433, 'cy': 1088.49275453309},
@@ -39,11 +39,12 @@ camera_name_2_id = {c:i for i,c in enumerate(camera_names)}
 #     'right_rear': {'w': 1541, 'h': 849, 'fx': 680.1104967755755, 'fy': 673.4213417751372, 'cx': 770.5,'cy': 424.5},
 # }
 qirui_name_2_notr_name = {
-    'front_main': 'FRONT'
-    ,'left_front': 'FRONT_LEFT'
-    ,'right_front': 'FRONT_RIGHT'
-    ,'left_rear': 'SIDE_LEFT'
-    ,'right_rear': 'SIDE_RIGHT'
+    'left_rear': 'REAR_LEFT',
+    'left_front': 'FRONT_LEFT',
+    'front_main': 'FRONT',
+    'right_front': 'FRONT_RIGHT',
+    'right_rear': 'REAR_RIGHT',
+    'rear_main': 'REAR_MAIN',
 }
 
 
@@ -106,11 +107,15 @@ def extract_camera_intrinsics(frame_infos):
 
 def extract_camera_extrinsics(frame_infos):
     camera_exntrinsics = {}
+    camera2opencv = Rotation.from_euler('yx', [90, -90], degrees=True).inv() # from [forward, left, up] to [right, down, forward]
     for cam in camera_names:
         sensor_id = frame_infos['mapping'][cam]
-        extrinsic = frame_infos['calibration'][sensor_id]['extrinsic']
-        # extrinsic = np.matmul(extrinsic, opencv2camera)
-        camera_exntrinsics[cam] = np.array(extrinsic)
+        extrinsic_lidar2camera = frame_infos['calibration'][sensor_id]['extrinsic']
+        camera2lidar = np.linalg.inv(np.array(extrinsic_lidar2camera))
+        camera2lidar[:3, :3] = camera2lidar[:3, :3] @ camera2opencv.as_matrix()
+        camera_exntrinsics[cam] = camera2lidar
+
+        print(f"[{cam}]position: {camera2lidar[:3, 3]}, rotation: {Rotation.from_matrix(camera2lidar[:3, :3]).as_euler('zyx', degrees=True)}")
 
     for camera, ext in camera_exntrinsics.items():
         filename = str(camera_name_2_id[camera]) + '.txt'
@@ -200,11 +205,7 @@ def reset_information_for_trajectory(trajectory_info, ego_frame_poses):
             timestamps.append(bbox['timestamp'])
             speeds.append(bbox['speed'])
             pose_vehicle = np.eye(4)
-            pose_vehicle[:3, :3] = np.array([
-                [math.cos(bbox['heading']), -math.sin(bbox['heading']), 0],
-                [math.sin(bbox['heading']), math.cos(bbox['heading']), 0],
-                [0, 0, 1]
-            ])
+            pose_vehicle[:3, :3] = Rotation.from_quat(bbox['rotation']).as_matrix()
             pose_vehicle[:3, 3] = np.array([bbox['center_x'], bbox['center_y'], bbox['center_z']])
 
             ego_pose = ego_frame_poses[int(frame_id)]
@@ -268,9 +269,8 @@ def extract_dynamic_objs_and_draw_dynamic_masks(output_dir, dynamic_mask_dir, in
         track_camera_visible = dict()  # 以每个camera的一个bbox为单位 frame_id, camera_id, track_id 记录这个camera看到了哪些物体
         trajectory_info = dict()  # 以每个track物体的一个bbox为单位 track_id, frame_id 记录LiDAR-synced boxes
         object_ids = dict()  # 每个物体的track_id对应一个数字 （track_id, object_id）之后streetgaussian训练时用的是object_id
-        track_vis_imgs_0, track_vis_imgs_1, track_vis_imgs_2 = [], [], []
+        track_vis_imgs_0, track_vis_imgs_1, track_vis_imgs_2, track_vis_imgs_3, track_vis_imgs_4, track_vis_imgs_5 = [], [], [],[], [], []
         cagetories = set()
-
         for i, frame in enumerate(raw_defines['frames']):
             track_info_cur_frame = dict()
             track_camera_visible_cur_frame = dict()
@@ -316,6 +316,7 @@ def extract_dynamic_objs_and_draw_dynamic_masks(output_dir, dynamic_mask_dir, in
                 lidar_synced_box['center_x'] = obj['obj_center_pos'][0]
                 lidar_synced_box['center_y'] = obj['obj_center_pos'][1]
                 lidar_synced_box['center_z'] = obj['obj_center_pos'][2]
+                lidar_synced_box['rotation'] = obj['obj_rotation']
                 quat = Quaternion(obj['obj_rotation'])
                 lidar_synced_box['heading'] = quaternion_yaw(quat)
                 lidar_synced_box['label'] = obj_class
@@ -333,18 +334,15 @@ def extract_dynamic_objs_and_draw_dynamic_masks(output_dir, dynamic_mask_dir, in
                     camera_synced_box['center_x'] = obj['obj_center_pos_cam'][0]
                     camera_synced_box['center_y'] = obj['obj_center_pos_cam'][1]
                     camera_synced_box['center_z'] = obj['obj_center_pos_cam'][2]
+                    camera_synced_box['rotation'] = obj['obj_rotation_cam']
                     quat = Quaternion(obj['obj_rotation_cam'])
                     camera_synced_box['heading'] = quaternion_yaw(quat)
                     camera_synced_box['label'] = obj_class
                     camera_synced_box['speed'] = speed
                     track_info_cur_frame[label_id]['camera_box'] = camera_synced_box
 
-                    c = math.cos(camera_synced_box['heading'])
-                    s = math.sin(camera_synced_box['heading'])
-                    rotz_matrix = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
-
                     obj_pose_vehicle = np.eye(4)
-                    obj_pose_vehicle[:3, :3] = rotz_matrix
+                    obj_pose_vehicle[:3, :3] = Rotation.from_quat(obj['obj_rotation_cam']).as_matrix()
                     obj_pose_vehicle[:3, 3] = np.array([camera_synced_box['center_x'], camera_synced_box['center_y'], camera_synced_box['center_z']])
 
                     camera_visible = []
@@ -362,12 +360,12 @@ def extract_dynamic_objs_and_draw_dynamic_masks(output_dir, dynamic_mask_dir, in
                         if valid.any():
                             camera_visible.append(camera_name_2_id[camera_name])
                             track_camera_visible_cur_frame[camera_name_2_id[camera_name]].append(label_id)
-                        if valid.all() and camera_name in ['front_main']:
+                        if valid.all():
                             vertices = vertices.reshape(2, 2, 2, 2).astype(np.int32)
                             draw_3d_box_on_img(vertices, frame_images[camera_name_2_id[camera_name]], color=(255,0,0))
-                            # draw_filled_3d_box_mask(dynamic_masks[camera_name_2_id[camera_name]], vertices)
-                            # cv2.putText(frame_images[camera_name_2_id[camera_name]], obj['category'] + '_' + str(label_id), vertices[0,0,0], fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=1, color=(255,0,0))
-                            # cv2.imwrite(os.path.join(track_dir, f"{camera_name}.jpg"), frame_images[camera_name_2_id[camera_name]])
+                            #draw_filled_3d_box_mask(dynamic_masks[camera_name_2_id[camera_name]], vertices)
+                            #cv2.putText(frame_images[camera_name_2_id[camera_name]], obj['category'] + '_' + str(label_id), vertices[0,0,0], fontFace=cv2.FONT_HERSHEY_SIMPLEX, fontScale=1, color=(255,0,0))
+                            #cv2.imwrite(os.path.join(track_dir, f"{camera_name}.jpg"), frame_images[camera_name_2_id[camera_name]])
 
                     # print(f'At frame {frame_id}, label {label_id} has a camera-synced box visible from cameras {camera_visible}')
                 else:
@@ -384,17 +382,23 @@ def extract_dynamic_objs_and_draw_dynamic_masks(output_dir, dynamic_mask_dir, in
             #     frame_images[0],
             #     frame_images[1],
             #     frame_images[2]], axis=1)
-            track_vis_imgs_0.append(frame_images[0])
-            # track_vis_imgs_1.append(frame_images[1])
-            # track_vis_imgs_2.append(frame_images[2])
+            track_vis_imgs_0.append(frame_images[camera_name_2_id['front_main']])
+            track_vis_imgs_1.append(frame_images[camera_name_2_id['left_front']])
+            track_vis_imgs_2.append(frame_images[camera_name_2_id['right_front']])
+            track_vis_imgs_3.append(frame_images[camera_name_2_id['left_rear']])
+            track_vis_imgs_4.append(frame_images[camera_name_2_id['right_rear']])
+            track_vis_imgs_5.append(frame_images[camera_name_2_id['rear_main']])
         print(f'==== cagetories: {cagetories}')
 
-        ego_frame_poses, _ = load_ego_poses(output_dir)
+        ego_frame_poses, _ = load_ego_poses(output_dir, 6)
         reset_information_for_trajectory(trajectory_info, ego_frame_poses)
 
         imageio.mimwrite(os.path.join(track_dir, "track_vis_0.mp4"), track_vis_imgs_0, fps=24)
-        # imageio.mimwrite(os.path.join(track_dir, "track_vis_1.mp4"), track_vis_imgs_1, fps=24)
-        # imageio.mimwrite(os.path.join(track_dir, "track_vis_2.mp4"), track_vis_imgs_2, fps=24)
+        imageio.mimwrite(os.path.join(track_dir, "track_vis_1.mp4"), track_vis_imgs_1, fps=24)
+        imageio.mimwrite(os.path.join(track_dir, "track_vis_2.mp4"), track_vis_imgs_2, fps=24)
+        imageio.mimwrite(os.path.join(track_dir, "track_vis_3.mp4"), track_vis_imgs_3, fps=24)
+        imageio.mimwrite(os.path.join(track_dir, "track_vis_4.mp4"), track_vis_imgs_4, fps=24)
+        imageio.mimwrite(os.path.join(track_dir, "track_vis_5.mp4"), track_vis_imgs_5, fps=24)
         with open(os.path.join(track_dir, "track_info.pkl"), 'wb') as f:
             pickle.dump(track_info, f)
 
@@ -473,7 +477,6 @@ def ts_from_frame_name(frame_name):
     ts = ts/1000
     return int(ts)
 
-
 def extra_ego_poses(filepath, frame_infos):
     """
     主车的频率高，用相机的时间戳去找最接近的主车时间戳，作为对应的主车位姿
@@ -482,16 +485,22 @@ def extra_ego_poses(filepath, frame_infos):
         raw_defines = json.load(f)
         all_ego_poses = {}
         timestamps = []
+        rot90_ego_pose = Rotation.from_euler('z', 90, degrees=True)
         # 创建查找器函数（仅排序一次）
         find_pose = create_nearest_pose_finder(all_ego_poses)
         for raw_define in raw_defines:
             ts = int(float(raw_define['timestamp'])*1000)
             position = raw_define['pose']['position']
-            orientation = raw_define['pose']['orientation']
+            euler_angles  = raw_define['pose']['euler_angles']
             posx,posy,posz = position['x'], position['y'], position['z']
-            w,x,y,z = orientation['qw'], orientation['qx'], orientation['qy'], orientation['qz']
             timestamps.append(ts)
-            all_ego_poses[ts] = pose_to_homogeneous_matrix(posx,posy,posz,w,x,y,z)
+            ego_pose = np.eye(4)
+            ego_pose[:3, 3] = [posx,posy,posz]
+            # Roll/pitch/yaw that represents a rotation with intrinsic sequence z-x-y.
+            # ref https://apollo.baidu.com/docs/apollo/latest/pose_8proto_source.html
+            rotation_matrix = rot90_ego_pose * Rotation.from_euler('ZXY', [euler_angles['z'], euler_angles['y'], euler_angles['x']])
+            ego_pose[:3, :3] = rotation_matrix.as_matrix()
+            all_ego_poses[ts] = ego_pose
         ego_poses = {} # 只需要取相机对应帧的主车轨迹。
         for frame in frame_infos['frames']:
             ts = ts_from_frame_name(frame['frame_name'])
@@ -524,6 +533,42 @@ def extra_ego_poses(filepath, frame_infos):
 
         return ego_poses
 
+def extra_lidar_poses(filepath, frame_infos):
+    with open(filepath, 'r') as f:
+        raw_defines = json.load(f)
+        ego_poses = {}
+        timestamps = []
+        for i, frame in enumerate(raw_defines['frames']):
+            timestamp = ts_from_frame_name(frame['frame_name'])
+            timestamps.append(timestamp)
+            lidar_pose = np.array(frame['lidar_pose'])
+            #print(f"[lidar:{timestamp}]position: {lidar_pose[:3, 3]}, rotation: {Rotation.from_matrix(lidar_pose[:3, :3]).as_euler('zyx', degrees=True)}")
+            ego_poses[timestamp] = lidar_pose
+
+        ego_poses_ndarray = np.array([pose for pose in ego_poses.values()])
+        mean_pos = ego_poses_ndarray[:,:,3].mean(axis=0)
+        for ts, pose in ego_poses.items():
+            pose[:3,3] -= mean_pos[:3]
+
+        for i, ts in enumerate(sorted(ego_poses.keys())):
+            ego_pose = ego_poses[ts]
+            filename = os.path.join(ego_pose_dir, f'{i:06d}' + '.txt')
+            np.savetxt(filename, ego_pose, delimiter=' ')
+            for camera, ext in extrinsics.items():
+                filename = os.path.join(ego_pose_dir, f'{i:06d}_{camera_name_2_id[camera]}' + '.txt')
+                np.savetxt(filename, ego_pose @ ext, delimiter=' ')
+
+        timestamps = {'FRAME': {}}
+        timestamps.update({c: {} for c in qirui_name_2_notr_name.values()})
+        for i, ts in enumerate(sorted(ego_poses.keys())):
+            timestamps['FRAME'][f'{i:06d}'] = ts / 1000
+            for camera in extrinsics.keys():
+                notr_cme_name = qirui_name_2_notr_name[camera]
+                timestamps[notr_cme_name][f'{i:06d}'] = ts / 1000
+        with open(os.path.join(output_dir, 'timestamps.json'), 'w') as file:
+            json.dump(timestamps, file, indent=4)
+
+        return ego_poses
 
 def find_closest_timestamp(all_timestamps, ts):
     min_diff = float('inf')
@@ -537,7 +582,7 @@ def find_closest_timestamp(all_timestamps, ts):
 
 
 def extract_point_clounds(frame_infos, ego_poses, lidar_2_imu, lidar_2_cameras, extrinsics, intrinsics, distorted_w, distorted_h, img_dir, lidar_depth_dir, lidar_background_dir, lidar_actor_dir):
-    track_info, track_camera_visible, trajectory = load_track(output_dir, load_interpolated=False)
+    track_info, track_camera_visible, trajectory = load_track(output_dir)
     pointcloud_actor = dict()
     for track_id, traj in trajectory.items():
         dynamic = not traj['stationary']
@@ -727,16 +772,14 @@ def generate_dynamic_masks(extrinsics, intrinsics, distorted_w, distorted_h, out
         track_camera_visible_cur_frame = track_camera_visible[frame]
         for cam, track_ids in track_camera_visible_cur_frame.items():
             dynamic_mask_name = f'{frame}_{cam}.jpg'
-            dynamic_mask = np.zeros((distorted_h[camera_names[cam]], distorted_w[camera_names[cam]]), dtype=np.uint8).astype(np.bool_)
+            camera_name = camera_names[cam]
+            dynamic_mask = np.zeros((distorted_h[camera_name], distorted_w[camera_name]), dtype=np.uint8).astype(np.bool_)
 
             # deformable_mask_name = f'{frame}_{cam}_deformable.png'
-            deformable_mask = np.zeros((distorted_h[camera_names[cam]], distorted_w[camera_names[cam]]), dtype=np.uint8).astype(np.bool_)
+            deformable_mask = np.zeros((distorted_h[camera_name], distorted_w[camera_name]), dtype=np.uint8).astype(np.bool_)
 
-            calibration_dict = dict()
-            calibration_dict['extrinsic'] = extrinsics[camera_names[cam]]
-            calibration_dict['intrinsic'] = intrinsics[camera_names[cam]]
-            calibration_dict['height'] = distorted_h[camera_names[cam]]
-            calibration_dict['width'] = distorted_w[camera_names[cam]]
+            fx, fy, cx, cy = intrinsics[camera_name][0,0], intrinsics[camera_name][1,1], intrinsics[camera_name][0,2], intrinsics[camera_name][1,2]
+            camera_calibration = {'width': distorted_w[camera_name], 'height': distorted_h[camera_name], 'extrinsic': {'transform': extrinsics[camera_name]}, 'intrinsic': [fx,fy,cx,cy]}
 
             for track_id in track_ids:
                 object_tracklet = trajectory[track_id]
@@ -748,8 +791,7 @@ def generate_dynamic_masks(extrinsics, intrinsics, distorted_w, distorted_h, out
                 box_mask = project_label_to_mask(
                     dim=[length, width, height],
                     obj_pose=pose_vehicle,
-                    calibration=None,
-                    calibration_dict=calibration_dict,
+                    calibration=dict_to_namespace(camera_calibration)
                 )
 
                 dynamic_mask = np.logical_or(dynamic_mask, box_mask)
@@ -777,6 +819,9 @@ def load_lidar_2_cameras(raw_dir):
     with open(os.path.join(raw_dir, 'extrinsics', 'lidar2camera', 'lidar2rightrear.yaml'), 'r') as f:
         config = yaml.safe_load(f)
         lidar_2_cameras['right_rear'] = np.array(config['transform'])
+    with open(os.path.join(raw_dir, 'extrinsics', 'lidar2camera', 'lidar2rearmain.yaml'), 'r') as f:
+        config = yaml.safe_load(f)
+        lidar_2_cameras['rear_main'] = np.array(config['transform'])
     return lidar_2_cameras
 
 
@@ -826,14 +871,21 @@ if __name__ == '__main__':
     os.makedirs(lidar_actor_dir, exist_ok=True)
     os.makedirs(lidar_cond_dir, exist_ok=True)
 
+    # track_camera_visible_path = os.path.join(track_dir, 'track_camera_visible.pkl')
+    # with open(track_camera_visible_path, 'rb') as f:
+    #     track_camera_visible = pickle.load(f)
+
     lidar_2_cameras = load_lidar_2_cameras(raw_dir)
     lidar_2_imu = load_lidar_2_imu(raw_dir)
     frame_infos = extract_frame_infos(os.path.join(raw_dir, 'info.json'))
     intrinsics, distcoeffs = extract_camera_intrinsics(frame_infos)
     extrinsics = extract_camera_extrinsics(frame_infos)
-    ego_poses = extra_ego_poses(os.path.join(raw_dir, 'localization.json'), frame_infos)
+
+    clip_path = os.path.join(raw_dir, 'dynamic_obj', 'autolabel_10hz', 'clip_1746752396800.json')
+    #ego_poses = extra_ego_poses(os.path.join(raw_dir, 'localization.json'), frame_infos)
+    ego_poses = extra_lidar_poses(clip_path, frame_infos)
     intrinsics, distorted_w, distorted_h, images = extract_images(frame_infos, intrinsics, distcoeffs, raw_dir, img_dir, dynamic_mask_dir)
-    extract_dynamic_objs_and_draw_dynamic_masks(output_dir, dynamic_mask_dir, intrinsics, distorted_w, distorted_h, images, os.path.join(raw_dir, 'dynamic_obj', 'autolabel_10hz', 'clip_1746752396800.json'), track_dir)
-    # generate_dynamic_masks(extrinsics, intrinsics, distorted_w, distorted_h, output_dir)
+    extract_dynamic_objs_and_draw_dynamic_masks(output_dir, dynamic_mask_dir, intrinsics, distorted_w, distorted_h, images, clip_path, track_dir)
+    generate_dynamic_masks(extrinsics, intrinsics, distorted_w, distorted_h, output_dir)
     # mask_images(r'D:\Projects\3dgs_datas\dataset\horizon\20240508/images', r'D:\Projects\3dgs_datas\dataset\horizon\20240508/mask_images', r'D:\Projects\3dgs_datas\dataset\horizon\20240508/masks')
-    extract_point_clounds(frame_infos, ego_poses, lidar_2_imu, lidar_2_cameras, extrinsics, intrinsics, distorted_w, distorted_h, img_dir, lidar_depth_dir, lidar_background_dir, lidar_actor_dir)
+    #extract_point_clounds(frame_infos, ego_poses, lidar_2_imu, lidar_2_cameras, extrinsics, intrinsics, distorted_w, distorted_h, img_dir, lidar_depth_dir, lidar_background_dir, lidar_actor_dir)
