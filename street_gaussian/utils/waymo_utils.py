@@ -13,6 +13,7 @@ from data_processor.waymo_processor.waymo_helpers import image_heights, image_wi
 from data_processor.waymo_processor.waymo_helpers import _camera2label, _label2camera, waymo_track2label, load_camera_info, load_track
 
 from easyvolcap.utils.console_utils import *
+from PIL import Image
 # box_info: box_center_x box_center_y box_center_z box_heading
 
 
@@ -107,12 +108,18 @@ def get_obj_pose_tracking(datadir, selected_frames, cameras):
 def generate_dataparser_outputs(
     datadir,
     selected_frames=None,
-    cameras=[0, 1, 2, 3, 4]
+    cameras=[0, 1, 2, 3, 4],
+    load_interpolated=True,
 ):
+    # load calibration and ego pose
+    intrinsics, extrinsics, ego_frame_poses, ego_cam_poses = load_camera_info(datadir, load_interpolated)
 
-    image_dir = os.path.join(datadir, 'images')
+    if load_interpolated:
+        image_dir = os.path.join(datadir, 'interpolated_images')
+    else:
+        image_dir = os.path.join(datadir, 'images')
     image_filenames_all = sorted(glob(os.path.join(image_dir, '*.png')))
-    num_frames_all = len(image_filenames_all) // 5
+    num_frames_all = len(ego_frame_poses)
 
     if selected_frames is None:
         start_frame = 0
@@ -122,8 +129,6 @@ def generate_dataparser_outputs(
         start_frame, end_frame = selected_frames[0], selected_frames[1]
     num_frames = end_frame - start_frame + 1
 
-    # load calibration and ego pose
-    intrinsics, extrinsics, ego_frame_poses, ego_cam_poses = load_camera_info(datadir)
 
     # load camera, frame, path
     frames, frames_idx, cams, image_filenames = [], [], [], []
@@ -131,17 +136,26 @@ def generate_dataparser_outputs(
     cams_timestamps = []
     tracklet_timestamps = []
 
-    timestamp_path = os.path.join(datadir, 'timestamps.json')
+    if load_interpolated:
+        timestamp_path = os.path.join(datadir, 'interpolated_track', 'timestamps.json')
+    else:
+        timestamp_path = os.path.join(datadir, 'timestamps.json')
     with open(timestamp_path, 'r') as f:
         timestamps = json.load(f)
 
     for frame in range(start_frame, end_frame + 1):
         tracklet_timestamps.append(timestamps[_label2camera[0]][f'{frame:06d}'])  # assume the tracklet timestamp is the same as the front camera
 
+    img_resolutions = {}
     for image_filename in image_filenames_all:
         image_basename = os.path.basename(image_filename)
         frame = image_filename_to_frame(image_basename)
         cam = image_filename_to_cam(image_basename)
+        if cam not in img_resolutions:
+            image = Image.open(image_filename)
+            width, height = image.size
+            img_resolutions[cam] = {'width': width, 'height': height}
+
         if frame >= start_frame and frame <= end_frame and cam in cameras:
             ixt = intrinsics[cam]
             ext = extrinsics[cam]
@@ -253,6 +267,7 @@ def generate_dataparser_outputs(
     result['cams'] = cams
     result['frames_idx'] = frames_idx
     result['cams_timestamps'] = cams_timestamps
+    result['img_resolutions'] = img_resolutions
 
     # run colmap
     colmap_basedir = os.path.join(f'{cfg.model_path}/colmap')

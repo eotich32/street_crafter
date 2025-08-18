@@ -6,7 +6,7 @@ from street_gaussian.config import cfg
 from video_diffusion.sample_condition import VideoDiffusionModel
 from street_gaussian.utils.camera_utils import cameraList_from_camInfos
 
-def create_scene():
+def create_scene(device='cuda'):
     dataset = Dataset()
     gaussians = StreetGaussianModel(dataset.metadata)
     if (cfg.mode == 'train' and cfg.diffusion.use_diffusion) or cfg.mode in ['diffusion','parallel_diffusion']:
@@ -41,13 +41,17 @@ def create_scene():
 
 def create_scene_for_diffusion_inference(scene_meta, device='cuda'):
     gaussians = StreetGaussianModel(scene_meta)
-    print("Diffusion model loaded")
-    video_diffusion = VideoDiffusionModel(
-        config_path=cfg.diffusion.config_path,
-        ckpt_path=cfg.diffusion.ckpt_path,
-        height=cfg.diffusion.height,
-        width=cfg.diffusion.width
-    )
+    if cfg.diffusion.use_img_diffusion:
+        print("Image Diffusion Model is used")
+        video_diffusion = None
+    else:
+        video_diffusion = VideoDiffusionModel(
+            config_path=cfg.diffusion.config_path,
+            ckpt_path=cfg.diffusion.ckpt_path,
+            height=cfg.diffusion.height,
+            width=cfg.diffusion.width
+        )
+        print("Diffusion model loaded")
     pointcloud_processor = getPointCloudProcessor()
 
     scene = Scene(

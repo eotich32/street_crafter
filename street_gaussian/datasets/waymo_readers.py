@@ -3,8 +3,10 @@ from street_gaussian.utils.waymo_utils import generate_dataparser_outputs
 from street_gaussian.utils.graphics_utils import focal2fov
 from street_gaussian.utils.data_utils import get_val_frames
 from street_gaussian.datasets.base_readers import CameraInfo, SceneInfo, getNerfppNorm
-from street_gaussian.utils.novel_view_utils import waymo_novel_view_cameras
+from street_gaussian.utils.novel_view_utils import waymo_novel_view_cameras, append_interpolated_novel_view
+from data_processor.waymo_processor.waymo_helpers import image_filename_to_frame, image_filename_to_cam
 from street_gaussian.config import cfg
+import copy
 from PIL import Image
 import os
 import numpy as np
@@ -30,22 +32,40 @@ def readWaymoInfo(path, images='images', split_train=-1, split_test=-1, **kwargs
         os.system(f'rm -rf {save_dir}')
         shutil.copytree(colmap_dir, save_dir)
 
+    load_interpolated = cfg.data.get('load_interpolated', False)
+    interpolated_frame_mapping = None
+    if load_interpolated:
+        interpolated_mapping_file = os.path.join(path, 'interpolated_track', 'frame_mapping.json')
+        if os.path.exists(interpolated_mapping_file):
+            with open(interpolated_mapping_file, "r") as f:
+                interpolated_frame_mapping = json.load(f)
+
     # dynamic mask
-    dynamic_mask_dir = os.path.join(path, 'dynamic_mask')
+    if load_interpolated:
+        dynamic_mask_dir = os.path.join(path, 'interpolated_dynamic_mask')
+    else:
+        dynamic_mask_dir = os.path.join(path, 'dynamic_mask')
     load_dynamic_mask = True
 
     # sky mask
-    sky_mask_dir = os.path.join(path, 'sky_mask')
+    if load_interpolated:
+        sky_mask_dir = os.path.join(path, 'interpolated_sky_mask')
+    else:
+        sky_mask_dir = os.path.join(path, 'sky_mask')
     load_sky_mask = (cfg.mode == 'train')
 
     # lidar depth
-    lidar_depth_dir = os.path.join(path, 'lidar/depth')
+    if load_interpolated:
+        lidar_depth_dir = os.path.join(path, 'interpolated_lidar/depth')
+    else:
+        lidar_depth_dir = os.path.join(path, 'lidar/depth')
     load_lidar_depth = (cfg.mode == 'train')
 
     output = generate_dataparser_outputs(
         datadir=path,
         selected_frames=selected_frames,
         cameras=cfg.data.get('cameras', [0, 1, 2]),
+        load_interpolated=load_interpolated
     )
 
     exts = output['exts']
@@ -88,10 +108,26 @@ def readWaymoInfo(path, images='images', split_train=-1, split_test=-1, **kwargs
         ixt = ixts[i]
         ego_pose = ego_cam_poses[i]
         image_path = image_filenames[i]
+        img_dir = os.path.dirname(image_path)
         image_name = os.path.basename(image_path).split('.')[0]
-        image = Image.open(image_path)
-
-        width, height = image.size
+        if interpolated_frame_mapping is not None and not interpolated_frame_mapping[str(frames_idx[i])]['is_original']:
+            # 插值之后，生成的新view没有对应的image（作为新视角用diffusion补全），此时不能直接读image，因为这个imagepath只是空文件占位符
+            # 在后面调用append_interpolated_novel_view函数里面，会生成雷达图填充这个image，见append_interpolated_novel_view
+            image = None
+            cam = image_filename_to_cam(image_name)
+            frame = image_filename_to_frame(image_name)
+            while image is None:
+                try:
+                    image = Image.open(os.path.join(img_dir, f'{frame:06d}_{cam}.png'))
+                except Exception as e:
+                    frame -= 1
+            # width, height = output['img_resolutions'][cam]['width'], output['img_resolutions'][cam]['height']
+            width, height = image.size
+            is_original = False
+        else:
+            image = Image.open(image_path)
+            width, height = image.size
+            is_original = True
         fx, fy = ixt[0, 0], ixt[1, 1]
 
         FovY = focal2fov(fy, height)
@@ -104,6 +140,9 @@ def readWaymoInfo(path, images='images', split_train=-1, split_test=-1, **kwargs
         K = ixt.copy()
 
         metadata = dict()
+        metadata['width'] = width
+        metadata['height'] = height
+        metadata['is_original'] = is_original
         metadata['frame'] = frames[i]
         metadata['cam'] = cams[i]
         metadata['frame_idx'] = frames_idx[i]
@@ -118,13 +157,13 @@ def readWaymoInfo(path, images='images', split_train=-1, split_test=-1, **kwargs
         guidance = dict()
 
         # load dynamic mask
-        if load_dynamic_mask:
+        if load_dynamic_mask and (interpolated_frame_mapping is None or interpolated_frame_mapping[str(frames_idx[i])]['is_original']):
             dynamic_mask_path = os.path.join(dynamic_mask_dir, f'{image_name}.png')
             obj_bound = (cv2.imread(dynamic_mask_path)[..., 0]) > 0.
             guidance['obj_bound'] = Image.fromarray(obj_bound)
 
         # load lidar depth
-        if load_lidar_depth:
+        if load_lidar_depth and (interpolated_frame_mapping is None or interpolated_frame_mapping[str(frames_idx[i])]['is_original']):
             depth_path = os.path.join(lidar_depth_dir, f'{image_name}.npz')
             depth = np.load(depth_path)
             mask = depth['mask'].astype(np.bool_)
@@ -134,7 +173,7 @@ def readWaymoInfo(path, images='images', split_train=-1, split_test=-1, **kwargs
             guidance['lidar_depth'] = depth
 
         # load sky mask
-        if load_sky_mask:
+        if load_sky_mask and (interpolated_frame_mapping is None or interpolated_frame_mapping[str(frames_idx[i])]['is_original']):
             sky_mask_path = os.path.join(sky_mask_dir, f'{image_name}.png')
             sky_mask = (cv2.imread(sky_mask_path)[..., 0]) > 0.
             guidance['sky_mask'] = Image.fromarray(sky_mask)
@@ -157,7 +196,8 @@ def readWaymoInfo(path, images='images', split_train=-1, split_test=-1, **kwargs
         cam_info.metadata['is_val'] = True
 
     print('making novel view cameras')
-    novel_view_cam_infos = waymo_novel_view_cameras(cam_infos, ego_frame_poses, obj_info, cams_tracklets)
+    original_cameras_for_novel_view = [cam_info for cam_info in cam_infos if is_original in cam_info.metadata and cam_info.metadata['is_original']] # 插值的不在这里生成新视角，只有原始视角才需要调用waymo_novel_view_cameras生成新视角
+    novel_view_cam_infos = waymo_novel_view_cameras(original_cameras_for_novel_view, ego_frame_poses, obj_info, cams_tracklets)
 
     # 3
     # Get scene extent
@@ -180,6 +220,14 @@ def readWaymoInfo(path, images='images', split_train=-1, split_test=-1, **kwargs
     # 5. We write scene center and radius to scene metadata
     scene_metadata['scene_center'] = nerf_normalization['center']
     scene_metadata['scene_radius'] = nerf_normalization['radius']
+
+    if interpolated_frame_mapping is not None and cfg.mode == 'train':
+        scene_metadata['interpolated_frame_mapping'] = interpolated_frame_mapping
+        novel_cameras = [cam_info for cam_info in cam_infos if not interpolated_frame_mapping[str(cam_info.metadata['frame_idx'])]['is_original']]
+        append_interpolated_novel_view(novel_view_cam_infos, novel_cameras, obj_info, cams_tracklets)
+        train_cam_infos = [cam_info for cam_info in cam_infos if interpolated_frame_mapping[str(cam_info.metadata['frame_idx'])]['is_original']]
+        test_cam_infos = [cam_info for cam_info in cam_infos if interpolated_frame_mapping[str(cam_info.metadata['frame_idx'])]['is_original']]
+
     print(f'Scene extent: {nerf_normalization["radius"]}')
 
     scene_info = SceneInfo(

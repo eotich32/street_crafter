@@ -74,8 +74,11 @@ def get_object(object_list, name):
     return object_list[0]
 
 
-def load_track(seq_save_dir):
-    track_dir = os.path.join(seq_save_dir, 'track')
+def load_track(seq_save_dir, load_interpolated=True):
+    if load_interpolated:
+        track_dir = os.path.join(seq_save_dir, 'interpolated_track')
+    else:
+        track_dir = os.path.join(seq_save_dir, 'track')
     assert os.path.exists(track_dir), f"Track directory {track_dir} does not exist."
 
     track_info_path = os.path.join(track_dir, 'track_info.pkl')
@@ -95,8 +98,11 @@ def load_track(seq_save_dir):
 # load ego pose and camera calibration(extrinsic and intrinsic)
 
 
-def load_ego_poses(datadir):
-    ego_pose_dir = os.path.join(datadir, 'ego_pose')
+def load_ego_poses(datadir, load_interpolated=True):
+    if load_interpolated:
+        ego_pose_dir = os.path.join(datadir, 'interpolated_ego_pose')
+    else:
+        ego_pose_dir = os.path.join(datadir, 'ego_pose')
 
     ego_frame_poses = []
     ego_cam_poses = [[] for i in range(5)]
@@ -146,8 +152,11 @@ def load_calibration(datadir):
 
 
 # load ego pose and camera calibration(extrinsic and intrinsic)
-def load_camera_info(datadir):
-    ego_pose_dir = os.path.join(datadir, 'ego_pose')
+def load_camera_info(datadir, load_interpolated=False):
+    if load_interpolated:
+        ego_pose_dir = os.path.join(datadir, 'interpolated_ego_pose')
+    else:
+        ego_pose_dir = os.path.join(datadir, 'ego_pose')
     extrinsics_dir = os.path.join(datadir, 'extrinsics')
     intrinsics_dir = os.path.join(datadir, 'intrinsics')
 

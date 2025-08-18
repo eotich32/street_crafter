@@ -65,7 +65,7 @@ def diffusion_inference_worker(device_id, scene_metadata, obj_meta, novel_viewpo
         torch.cuda.set_device(device_id)
         device = torch.device(f'cuda:{device_id}')
         scene, train_viewpoint_stack = create_scene_for_diffusion_inference(scene_metadata, device=device)
-        print(f'===================== Diffusion runner in gpu:{device_id}, num of novel_viewpoint_stack: {len(novel_viewpoint_stack)}, num of train_viewpoint_stack: {len(train_viewpoint_stack)}')
+        print(f'===================== Diffusion runner in gpu:{device_id}, num of novel_viewpoint_stack: {len(novel_viewpoint_stack)}, num of train_viewpoint_stack: {len(train_viewpoint_stack)}, use_img_diffusion: {cfg.diffusion.use_img_diffusion}')
         diffusion_runner = getDiffusionRunner(scene)
         for v in novel_viewpoint_stack:
             v.set_device('cuda')

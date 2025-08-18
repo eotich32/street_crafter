@@ -398,7 +398,7 @@ def parse_seq_rawdata(process_list, seq_path, seq_save_dir, skip_existing):
         lidar_dir_depth = os.path.join(lidar_dir, 'depth')
         os.makedirs(lidar_dir_depth, exist_ok=True)
         
-        track_info, track_camera_visible, trajectory = load_track(seq_save_dir)
+        track_info, track_camera_visible, trajectory = load_track(seq_save_dir, interpolated_first=False)
         extrinsics, intrinsics = load_calibration(seq_save_dir)
 
         pointcloud_actor = dict()
@@ -426,7 +426,7 @@ def parse_seq_rawdata(process_list, seq_path, seq_save_dir, skip_existing):
     else:
         os.makedirs(dynamic_mask_dir, exist_ok=True)
         print("Processing dynamic mask...")
-        track_info, track_camera_visible, trajectory = load_track(seq_save_dir)
+        track_info, track_camera_visible, trajectory = load_track(seq_save_dir, interpolated_first=False)
         extrinsics, intrinsics = load_calibration(seq_save_dir)
         for frame, track_info_frame in track_info.items():
             track_camera_visible_cur_frame = track_camera_visible[frame]

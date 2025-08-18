@@ -122,7 +122,7 @@ class WaymoDiffusionRunner(DiffusionRunner):
     def __init__(self, scene: Scene):
         super(WaymoDiffusionRunner, self).__init__(scene)
 
-    def run(self, cameras: List[Camera], train_cameras: List[Camera], use_render=True, scale: float = 0.3, masked_guidance: bool = False):
+    def run(self, cameras: List[Camera], train_cameras: List[Camera], obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
         cameras = [camera for camera in cameras if camera.meta['cam'] == 0 or camera.meta['cam'] == 1 or camera.meta['cam'] == 2]  # 3 camera
         diffusion_results = []
 
@@ -446,8 +446,8 @@ class ImageDiffusionRunner():
         image_tensor = transform_resize(image_tensor)
         return image_tensor
 
-    def run(self, cameras: List[Camera], train_cameras: List[Camera], use_render=True, scale: float = 0.3, masked_guidance: bool = False):
-        cameras = [camera for camera in cameras if camera.meta['cam'] == 0 or camera.meta['cam'] == 1 or camera.meta['cam'] == 2]  # 3 camera
+    def run(self, cameras: List[Camera], train_cameras: List[Camera], obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
+        # cameras = [camera for camera in cameras if camera.meta['cam'] == 0 or camera.meta['cam'] == 1 or camera.meta['cam'] == 2]  # 3 camera
         diffusion_results = []
         diffusion_save_dir = os.path.join(cfg.model_path, 'diffusion')
         os.makedirs(diffusion_save_dir, exist_ok=True)

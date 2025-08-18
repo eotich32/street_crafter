@@ -38,9 +38,28 @@ class WaymoPointCloudProcessor(BasePointCloudProcessor):
         self.flip_axis = 1
         self.ply_dict = self.read_lidar_ply()
 
+
+    def fuse_nearest_left_right_frames(self, ply_dict_background, ply_dict_background_visible, frame_id):
+        left_frame, right_frame = frame_id, frame_id
+        while left_frame not in ply_dict_background:
+            left_frame -= 1
+        while right_frame not in ply_dict_background:
+            right_frame += 1
+        left_ply = ply_dict_background[left_frame]
+        right_ply = ply_dict_background[right_frame]
+
+        left_visible = ply_dict_background_visible[left_frame]
+        right_visible = ply_dict_background_visible[right_frame]
+        return np.concatenate([left_ply, right_ply], axis=0), np.concatenate([left_visible, right_visible], axis=0)
+
+
     def read_lidar_ply(self):
         ply_dict = dict()
-        lidar_dir = os.path.join(self.datadir, 'lidar')
+        load_interpolated = cfg.data.get('load_interpolated', False)
+        if load_interpolated:
+            lidar_dir = os.path.join(self.datadir, 'interpolated_lidar')
+        else:
+            lidar_dir = os.path.join(self.datadir, 'lidar')
 
         # read background ply (we only save the pointcloud which is visible to the input camera)
         lidar_background_dir = os.path.join(lidar_dir, 'background')
@@ -71,13 +90,23 @@ class WaymoPointCloudProcessor(BasePointCloudProcessor):
                 visible_mask = np.logical_or(visible_mask, visible_cam_mask)
             ply_dict_background_visible[frame] = visible_mask
 
+        if load_interpolated:
+            interpolated_mapping_file = os.path.join(self.datadir, 'interpolated_track', 'frame_mapping.json')
+            with open(interpolated_mapping_file, "r") as f:
+                interpolated_frame_mapping = json.load(f)
+                for frame_id_str, mapping in interpolated_frame_mapping.items():
+                    if not mapping['is_original']:
+                        ply_dict_background[int(frame_id_str)], ply_dict_background_visible[int(frame_id_str)] = \
+                            self.fuse_nearest_left_right_frames(ply_dict_background, ply_dict_background_visible, int(frame_id_str))
+
         ply_dict['background'] = ply_dict_background
         ply_dict['background_visible'] = ply_dict_background_visible
 
         print('Reading Actor ply')
         # read actor lidar
         lidar_actor_dir = os.path.join(lidar_dir, 'actor')
-        for track_id in os.listdir(lidar_actor_dir):
+        for i, track_id in enumerate(tqdm(os.listdir(lidar_actor_dir), desc='Reading Actor ply')):
+        # for track_id in os.listdir(lidar_actor_dir):
             ply_dict_actor = dict()
 
             lidar_actor_dir_ = os.path.join(lidar_actor_dir, track_id)

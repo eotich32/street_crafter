@@ -537,7 +537,7 @@ def find_closest_timestamp(all_timestamps, ts):
 
 
 def extract_point_clounds(frame_infos, ego_poses, lidar_2_imu, lidar_2_cameras, extrinsics, intrinsics, distorted_w, distorted_h, img_dir, lidar_depth_dir, lidar_background_dir, lidar_actor_dir):
-    track_info, track_camera_visible, trajectory = load_track(output_dir)
+    track_info, track_camera_visible, trajectory = load_track(output_dir, load_interpolated=False)
     pointcloud_actor = dict()
     for track_id, traj in trajectory.items():
         dynamic = not traj['stationary']
@@ -722,7 +722,7 @@ def merge_conflict_pixels(u,v,d):
 
 
 def generate_dynamic_masks(extrinsics, intrinsics, distorted_w, distorted_h, output_dir):
-    track_info, track_camera_visible, trajectory = load_track(output_dir)
+    track_info, track_camera_visible, trajectory = load_track(output_dir, load_interpolated=False)
     for frame, track_info_frame in track_info.items():
         track_camera_visible_cur_frame = track_camera_visible[frame]
         for cam, track_ids in track_camera_visible_cur_frame.items():
@@ -789,15 +789,17 @@ def load_lidar_2_imu(raw_dir):
 
 
 if __name__ == '__main__':
-    # with open(r'D:\Projects\51sim-ai\EmerNeRF\data\waymo\processed\street_crafter_049\interpolated_track\track_info.pkl', 'rb') as f:
-    #     track_info = pickle.load(f)
-    #     track_info = track_info
-    # with open(r'D:\Projects\51sim-ai\EmerNeRF\data\waymo\processed\street_crafter_049\interpolated_track\track_camera_visible.pkl', 'rb') as f:
-    #     track_camera_visible = pickle.load(f)
-    #     track_camera_visible = track_camera_visible
-    # with open(r'D:\Projects\51sim-ai\EmerNeRF\data\waymo\processed\street_crafter_049\interpolated_track\trajectory.pkl', 'rb') as f:
-    #     trajectory = pickle.load(f)
-    #     trajectory = trajectory
+    with open(r'D:\Projects\3dgs_datas\dataset\waymo\processed\street_crafter_049\interpolated_track\track_info.pkl', 'rb') as f:
+        track_info = pickle.load(f)
+        track_info = track_info
+    with open(r'D:\Projects\3dgs_datas\dataset\waymo\processed\street_crafter_049\interpolated_track\track_camera_visible.pkl', 'rb') as f:
+        track_camera_visible = pickle.load(f)
+        track_camera_visible = track_camera_visible
+    with open(r'D:\Projects\3dgs_datas\dataset\waymo\processed\street_crafter_049\interpolated_track\trajectory.pkl', 'rb') as f:
+        trajectory = pickle.load(f)
+        trajectory = trajectory
+    with open(r'D:\Projects\3dgs_datas\dataset\waymo\processed\street_crafter_049\interpolated_track\frame_mapping.json', "r") as f:
+        frame_mapping = json.load(f)
     # from waymo_processor.waymo_helpers import load_track, load_camera_info
     # intrinsics, extrinsics, ego_frame_poses, ego_cam_poses = load_camera_info(r'D:\Projects\51sim-ai\EmerNeRF\data\waymo\processed\street_crafter_049')
 

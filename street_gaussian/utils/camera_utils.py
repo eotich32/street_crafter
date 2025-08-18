@@ -109,6 +109,53 @@ class Camera():
     #     return ixt
 
 
+# 专门用于加载场景时渲染diffusion的雷达条件图
+# 原本的代码结构有循环依赖，对于新视角来说，要用WaymoPointCloudProcessor渲染雷达图，必须先生成Camera对象。而生成Camera对象，又需要加载image，而这个image就是渲染出来的雷达图。
+# 原本的代码在waymo_processor包中有专门的渲染雷达图的代码，需要在加载场景之前事先执行
+# 这里改成直接在加载场景时自动渲染，一步完成。
+class Camera4ForRenderCondition():
+    def __init__(
+        self,
+        R, T,
+        FoVx, FoVy, K, image_height, image_width,
+        trans=np.array([0.0, 0.0, 0.0]),
+        scale=1.0,
+        metadata=dict(),
+    ):
+        self.R = R
+        self.T = T
+        self.FoVx = FoVx
+        self.FoVy = FoVy
+        self.K = K
+        self.trans, self.scale = trans, scale
+        self.meta = metadata
+        self.image_height, self.image_width = image_height, image_width
+        self.zfar = 1000.0
+        self.znear = 0.001
+        self.world_view_transform = torch.tensor(getWorld2View2(R, T, trans, scale)).transpose(0, 1).to('cuda', non_blocking=True)
+
+        if self.K is not None:
+            self.projection_matrix = getProjectionMatrixK(znear=self.znear, zfar=self.zfar, K=self.K, H=self.image_height, W=self.image_width).transpose(0, 1).to('cuda', non_blocking=True)
+            self.K = torch.from_numpy(self.K).float().to('cuda', non_blocking=True)
+        else:
+            self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0, 1).to('cuda', non_blocking=True)
+
+        self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
+        self.camera_center = self.world_view_transform.inverse()[3, :3]
+
+    def get_extrinsic(self, world2cam=False) -> torch.Tensor:
+        w2c = self.world_view_transform.transpose(0, 1)
+        return w2c if world2cam else torch.linalg.inv(w2c)
+
+    def get_intrinsic(self) -> torch.Tensor:
+        return self.K
+
+    def set_device(self, device):
+        self.original_image = self.original_image.to(device)
+        for k, v in self.guidance.items():
+            self.guidance[k] = v.to(device, non_blocking=True)
+
+
 class MiniCam:
     def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform):
         self.image_width = width

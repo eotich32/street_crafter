@@ -6,9 +6,10 @@ import copy
 import torch
 from tqdm import tqdm
 from typing import List
+from PIL import Image
 
 from street_gaussian.datasets.base_readers import CameraInfo
-from street_gaussian.utils.camera_utils import Camera
+from street_gaussian.utils.camera_utils import Camera, Camera4ForRenderCondition
 from street_gaussian.utils.img_utils import visualize_depth_numpy, process_depth
 from street_gaussian.models.street_gaussian_renderer import StreetGaussianRenderer
 from street_gaussian.models.street_gaussian_model import StreetGaussianModel
@@ -18,6 +19,7 @@ from data_processor.waymo_processor.waymo_helpers import get_lane_shift_directio
 from data_processor.waymo_processor.waymo_helpers import LANE_SHIFT_SIGN as LANE_SHIFT_SIGN_WAYMO
 from street_gaussian.config import cfg
 from street_gaussian.utils.general_utils import matrix_to_quaternion_numpy, quaternion_to_matrix_numpy
+from street_gaussian.pointcloud_processor.waymo_processor import WaymoPointCloudProcessor
 
 from easyvolcap.utils.console_utils import *
 
@@ -221,7 +223,7 @@ def waymo_novel_view_cameras(cameras: List[CameraInfo], ego_frame_poses, obj_inf
     novel_view_cameras = []
     skip_count = 0
     
-    cameras = [camera for camera in cameras if camera.metadata['cam'] in [0,1,2]]  # only consider the FRONT camera (whose cam_idx is marked as 0)
+    # cameras = [camera for camera in cameras if camera.metadata['cam'] in [0,1,2]]  # only consider the FRONT camera (whose cam_idx is marked as 0)
     pbar = tqdm(total=len(cameras) * len(modes), desc='Making novel view cameras')
     for i, mode in enumerate(modes):
         for camera in cameras:
@@ -294,6 +296,67 @@ def waymo_novel_view_cameras(cameras: List[CameraInfo], ego_frame_poses, obj_inf
     novel_view_cameras = sorted(novel_view_cameras, key=lambda x: x.uid)
     log(f'Skipping {skip_count}/{len(novel_view_cameras)} novel view cameras')
     return novel_view_cameras
+
+
+def append_interpolated_novel_view(novel_view_cam_infos, cameras, obj_info, camera_tracklets):
+    lidar_condition_renderer = WaymoPointCloudProcessor()
+    pbar = tqdm(total=len(cameras), desc='Making interpolated novel view cameras')
+    for camera in cameras:
+        novel_view_camera = copy.copy(camera)
+        novel_view_camera = novel_view_camera._replace(metadata=copy.copy(camera.metadata))
+
+        image_name = novel_view_camera.image_name
+
+        # make novel view path
+        tag = '_interpolated'
+        novel_view_dir = os.path.join(cfg.source_path, 'lidar', f'color_render{tag}')
+        novel_view_image_name = f'{image_name}{tag}.png'
+        metadata = novel_view_camera.metadata
+        metadata['is_novel_view'] = True
+        metadata['novel_view_id'] = tag
+        cam, frame = metadata['cam'], metadata['frame']
+        novel_view_rgb_path = os.path.join(novel_view_dir, f'{str(frame).zfill(6)}_{cam}.png')
+        novel_view_mask_path = os.path.join(novel_view_dir, f'{str(frame).zfill(6)}_{cam}_mask.png')
+        metadata['guidance_rgb_path'] = novel_view_rgb_path
+        metadata['guidance_mask_path'] = novel_view_mask_path
+
+        camera_4_render = Camera4ForRenderCondition(
+                     R=camera.R,
+                     T=camera.T,
+                     FoVx=camera.FovX,
+                     FoVy=camera.FovY,
+                     K=copy.deepcopy(camera.K),
+                     image_height=camera.metadata['height'],
+                     image_width=camera.metadata['width'],
+                     metadata=camera.metadata,
+                 )
+        lidar_condition_renderer.render_condition(camera_4_render, obj_info)
+        image = Image.open(camera.metadata['guidance_rgb_path']) # 实际diffusion的新视角不用到这个image，但是后面的代码结构，要求这个非空才能执行下去
+
+        novel_view_camera = novel_view_camera._replace(
+            image=image,
+            image_name=novel_view_image_name, guidance=dict(), metadata=metadata)
+        novel_view_cam_infos.append(novel_view_camera)
+
+        # TODO: fix obj_pose and sky and lidar
+        cam = novel_view_camera.metadata['cam']
+        frame_idx = novel_view_camera.metadata['frame_idx']
+
+        skip_camera = False
+        for obj_id in obj_info.keys():
+            id = obj_info[obj_id]['id']
+            if camera_tracklets[cam, frame_idx, id, -1] < 0.:
+                continue
+            trans = camera_tracklets[cam, frame_idx, id, :3]
+            view = (novel_view_camera.R).T @ trans + novel_view_camera.T
+            depth = view[2]
+            if depth < cfg.render.novel_view.train_actor_distance_thresh and \
+                    depth > -cfg.render.novel_view.train_actor_distance_thresh:
+                skip_camera = True
+            break
+
+        novel_view_camera.metadata['skip_camera'] = skip_camera  # will skip camera for training if this is present
+        pbar.update()
 
 
 def pandaset_novel_view_cameras(cameras: List[CameraInfo], cam_poses, obj_info, camera_tracklets):
