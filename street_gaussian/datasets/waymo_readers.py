@@ -16,6 +16,54 @@ import shutil
 sys.path.append(os.getcwd())
 
 
+def set_reference_frames(cam_infos):
+    """
+    为cam_infos列表中每个is_original=False的元素设置ref_frame（即在原始轨迹中插值生成的新帧），
+    指向列表中其他is_original=True元素中帧编号最接近的那一个的image_name
+
+    参数:
+        cam_infos: 包含元素的列表，每个元素有:
+                   - metadata属性，包含'is_original'和'frame'的字典
+                   - image_name属性，表示该帧的图像名称
+    """
+    # 首先收集所有is_original为True的元素及其帧号和image_name
+    interpolated_frames = [
+        info
+        for info in cam_infos
+        if not info.metadata.get('is_original', False)
+    ]
+    original_frames = cam_infos
+
+    # 如果原始帧数量小于2，没有可参考的帧，直接返回
+    if len(interpolated_frames) < 2:
+        return
+
+    # 为每个原始帧找到最接近的其他原始帧的image_name
+    for info in interpolated_frames:
+        frame = info.metadata['frame']#, info.image_path
+        min_diff = None
+        closest_image_name = None
+
+        # 遍历其他原始帧，找到最接近的帧对应的image_name
+        for other_info in original_frames:
+            # 跳过自身
+            if info is other_info:
+                continue
+            other_frame, other_image_name = other_info.metadata['frame'], other_info.image_path
+
+            # 计算帧差的绝对值
+            diff = abs(frame - other_frame)
+
+            # 更新最小差值和对应的image_name
+            if min_diff is None or diff < min_diff and other_info.metadata.get('is_original', False):
+                min_diff = diff
+                closest_image_name = other_image_name
+
+        # 设置参考帧的image_name到ref_frame
+        if closest_image_name is not None:
+            info.metadata['ref_frame_image'] = closest_image_name
+
+
 def readWaymoInfo(path, images='images', split_train=-1, split_test=-1, **kwargs):
     selected_frames = cfg.data.get('selected_frames', None)
     if cfg.debug:
@@ -196,7 +244,7 @@ def readWaymoInfo(path, images='images', split_train=-1, split_test=-1, **kwargs
         cam_info.metadata['is_val'] = True
 
     print('making novel view cameras')
-    original_cameras_for_novel_view = [cam_info for cam_info in cam_infos if is_original in cam_info.metadata and cam_info.metadata['is_original']] # 插值的不在这里生成新视角，只有原始视角才需要调用waymo_novel_view_cameras生成新视角
+    original_cameras_for_novel_view = [cam_info for cam_info in cam_infos if 'is_original' in cam_info.metadata and cam_info.metadata['is_original']] # 插值的不在这里生成新视角，只有原始视角才需要调用waymo_novel_view_cameras生成新视角
     novel_view_cam_infos = waymo_novel_view_cameras(original_cameras_for_novel_view, ego_frame_poses, obj_info, cams_tracklets)
 
     # 3
@@ -220,6 +268,9 @@ def readWaymoInfo(path, images='images', split_train=-1, split_test=-1, **kwargs
     # 5. We write scene center and radius to scene metadata
     scene_metadata['scene_center'] = nerf_normalization['center']
     scene_metadata['scene_radius'] = nerf_normalization['radius']
+
+    # 对于插值生成的视角，设置其最临近的原始视角的image_name为其参考的图像，用于one step diffusion之后的difix后处理。（difix后处理需要一个参考图，此时用最临近的视角）
+    set_reference_frames(cam_infos)
 
     if interpolated_frame_mapping is not None and cfg.mode == 'train':
         scene_metadata['interpolated_frame_mapping'] = interpolated_frame_mapping

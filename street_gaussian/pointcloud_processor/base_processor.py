@@ -33,6 +33,8 @@ class BasePointCloudProcessor(ABC):
         ply_frame_dict = dict()
         bkgd_ply = []
         for frame in range(start_frame, end_frame + 1):
+            if frame not in self.ply_dict['background']:
+                continue
             bkgd_ply.append(self.ply_dict['background'][frame])
         bkgd_ply = np.concatenate(bkgd_ply, axis=0)  # [N, xyz + rgb]
         ply_frame_dict['background'] = bkgd_ply
@@ -74,6 +76,8 @@ class BasePointCloudProcessor(ABC):
         ply_bkgd = ply_frame_dict.pop('background')
         ply_bkgd_visible = []
         for frame in range(self.start_frame, self.end_frame + 1):
+            if frame not in self.ply_dict['background_visible']:
+                continue
             ply_bkgd_visible.append(self.ply_dict['background_visible'][frame])
         ply_bkgd_visible = np.concatenate(ply_bkgd_visible, axis=0)
         ply_bkgd = ply_bkgd[ply_bkgd_visible]

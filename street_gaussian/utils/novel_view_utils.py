@@ -239,6 +239,7 @@ def waymo_novel_view_cameras(cameras: List[CameraInfo], ego_frame_poses, obj_inf
             novel_view_image_name = f'{image_name}{tag}.png'
             metadata = novel_view_camera.metadata
             metadata['is_novel_view'] = True
+            metadata['ref_frame_image'] = novel_view_camera.image_path
             metadata['novel_view_id'] = tag
             cam, frame = metadata['cam'], metadata['frame']
             novel_view_rgb_path = os.path.join(novel_view_dir, f'{str(frame).zfill(6)}_{cam}.png')

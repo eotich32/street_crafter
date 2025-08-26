@@ -13,6 +13,10 @@ from video_diffusion.sample_condition import VideoDiffusionModel
 
 from easyvolcap.utils.console_utils import *
 from src_for_diffusion.LidarPainter import LidarPintoraConvIn
+from src_for_diffusion.difix.pipeline_difix import DifixPipeline
+from diffusers.utils import load_image
+from PIL import Image
+
 import torchvision
 import torchvision.transforms.functional as F
 
@@ -317,23 +321,20 @@ class WaymoDiffusionRunner(DiffusionRunner):
         assert filled.all(), 'Not all frames are passed through the prior'
 
         for i, camera in enumerate(cameras):
-            #camera.meta['diffusion_original_image'] = diffusion_result[i].float().to('cuda', non_blocking=True)
-            if cfg.diffusion.get('save_diffusion_render', True) and '2.0' in camera.image_name and '-2.0' not in camera.image_name: #>>>>使用2.0用于数据处理
-                #diffusion_image = (diffusion_result[i].permute(1, 2, 0) * 255).byte().cpu().numpy()
-                #diffusion_image = cv2.cvtColor(diffusion_image, cv2.COLOR_RGB2BGR)
+            camera.meta['diffusion_original_image'] = diffusion_result[i].float().to('cuda', non_blocking=True)
+            if cfg.diffusion.get('save_diffusion_render', True):
+                diffusion_image = (diffusion_result[i].permute(1, 2, 0) * 255).byte().cpu().numpy()
+                diffusion_image = cv2.cvtColor(diffusion_image, cv2.COLOR_RGB2BGR)
 
                 # Modify the guidance_rgb_path
                 diffusion_save_dir = os.path.join(cfg.model_path, 'diffusion')
                 os.makedirs(diffusion_save_dir, exist_ok=True)
                 save_path = os.path.join(diffusion_save_dir, camera.image_name)
                 save_path = save_path + '.png' if '.png' not in save_path else save_path
-                #save_path = save_path.replace('.png', f'_scale{scale}.png') if scale < 1.0 else save_path
-                diff_img = cv2.imread(save_path)
-                #diff_img = cv2.resize(diff_img, (1024, 576), interpolation=cv2.INTER_LANCZOS4)   #>>>>数据处理尺度对齐
-                diff_img = cv2.cvtColor(diff_img, cv2.COLOR_BGR2RGB)
-                image_tensor = torch.from_numpy(diff_img).permute(2, 0, 1).float() / 255.0 
-                camera.meta['diffusion_original_image'] = image_tensor.to('cuda', non_blocking=True)
-                #if scale == 1.0 or scale == 0.3:
+                save_path = save_path.replace('.png', f'_scale{scale}.png') if scale < 1.0 else save_path
+
+                if scale == 1.0 or scale == 0.3:
+                    cv2.imwrite(save_path, diffusion_image)                #if scale == 1.0 or scale == 0.3:
                 #cv2.imwrite(save_path, diffusion_image)
                 # original_path = camera.meta['guidance_rgb_path']
                 # modified_path = original_path.replace('color', 'prior')
@@ -368,7 +369,15 @@ class ImageDiffusionRunner():
 
         self.diff_model = LidarPintoraConvIn(pretrained_path=cfg.diffusion.img_ckpt)
         self.diff_model.set_eval()
-        print("Image DIffusion Model Loaded")
+
+        # use_difix = cfg.diffusion.get('use_difix', False)
+        # if use_difix:
+        #     self.difix_pipeline = DifixPipeline.from_pretrained("nvidia/difix_ref", trust_remote_code=True)
+        #     self.difix_pipeline.to("cuda")
+        #     print("======================== Image DIffusion Model Loaded, use difix as post processor")
+        # else:
+        #     self.difix_pipeline = None
+        #     print("======================== Image DIffusion Model Loaded")
 
     def get_diffusion(self):
         return self.scene.diffusion
@@ -477,6 +486,7 @@ class ImageDiffusionRunner():
 
                 output_image = self.diff_model(c_t, x_combined, "picture of urban street scene")
                 camera.meta['diffusion_original_image'] = output_image[0]* 0.5 + 0.5
+                camera.meta['diffusion_original_image'] = camera.meta['diffusion_original_image'].float().to('cuda', non_blocking=True)
                 output_pil = img_trans(output_image[0].cpu() * 0.5 + 0.5)
                 ref_pil = img_trans(x_combined[0].cpu())
 
@@ -486,6 +496,44 @@ class ImageDiffusionRunner():
             output_pil.save(save_path)
             ref_pil.save(save_path.replace('.png', '_ref.png'))
             #assert "000020" not in camera.image_name, "Debug"
+            # if self.difix_pipeline is not None:
+            #     with torch.no_grad():
+            #         input_image = camera.meta['diffusion_original_image'].resize((1024, 576), Image.LANCZOS)
+            #         print(f'======== input_image.size:{input_image.size}, min:{input_image.min()}, max:{input_image.max()}')
+            #         prompt = "remove degradation"
+            #         ref_image = load_image(camera.meta['ref_frame_image']) # difix后处理用最临近的视角真值作参考
+            #         print(f'======== ref_image.size:{ref_image.size}, min:{ref_image.min()}, max:{ref_image.max()}')
+            #         ref_image = ref_image.resize((1024, 576), Image.LANCZOS)
+            #         output_image = self.difix_pipeline(prompt, image=input_image, ref_image=ref_image, num_inference_steps=1, timesteps=[199], guidance_scale=0.0).images[0]
+            #         output_image.save(save_path)
+            #         print(f'======== output_image.size:{output_image.size}, min:{output_image.min()}, max:{output_image.max()}')
+            #         camera.meta['diffusion_original_image'] = output_image
+
+        use_difix = cfg.diffusion.get('use_difix', False)
+        if use_difix:
+            difix_pipeline = DifixPipeline.from_pretrained("nvidia/difix_ref", trust_remote_code=True)
+            difix_pipeline.to("cuda")
+            print("======================== Use Difix for diffusion post processing")
+            with torch.no_grad():
+                for camera in tqdm(cameras, desc='Running Difix'):
+                    input_image = camera.meta['diffusion_original_image']#.resize((1024, 576), Image.LANCZOS)
+                    input_image = (input_image * 255).clamp(0, 255).byte()
+                    input_image = input_image.permute(1, 2, 0)
+                    input_image = input_image.cpu().numpy()
+                    input_image = Image.fromarray(input_image)
+                    prompt = "remove degradation"
+                    ref_image = load_image(camera.meta['ref_frame_image']) # difix后处理用最临近的视角真值作参考
+                    ref_image = ref_image.resize((1024, 576), Image.LANCZOS)
+                    output_image = difix_pipeline(prompt, image=input_image, ref_image=ref_image, num_inference_steps=1, timesteps=[199], guidance_scale=0.0).images[0]
+                    save_path = os.path.join(diffusion_save_dir, camera.image_name)
+                    save_path = save_path + '.png' if '.png' not in save_path else save_path
+                    output_image.save(save_path)
+                    output_image = np.array(output_image, dtype=np.float32)  # 形状为 (576, 1024, 3)
+                    output_image = output_image / 255.0
+                    output_image = output_image.transpose(2, 0, 1)  # 转换后形状为 (3, 576, 1024)
+                    output_image = torch.from_numpy(output_image)
+
+                    camera.meta['diffusion_original_image'] = output_image
 
         return diffusion_results # empty list 
 

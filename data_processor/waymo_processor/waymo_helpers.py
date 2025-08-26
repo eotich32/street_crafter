@@ -152,8 +152,11 @@ def load_calibration(datadir):
 
 
 # load ego pose and camera calibration(extrinsic and intrinsic)
-def load_camera_info(datadir):
-    ego_pose_dir = os.path.join(datadir, 'ego_pose')
+def load_camera_info(datadir, load_interpolated=False):
+    if load_interpolated:
+        ego_pose_dir = os.path.join(datadir, 'interpolated_ego_pose')
+    else:
+        ego_pose_dir = os.path.join(datadir, 'ego_pose')
     extrinsics_dir = os.path.join(datadir, 'extrinsics')
     intrinsics_dir = os.path.join(datadir, 'intrinsics')
 
