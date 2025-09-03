@@ -45,8 +45,8 @@ def make_obj_pose(ego_pose, box_info):
     return obj_pose_vehicle, obj_pose_world
 
 
-def get_obj_pose_tracking(datadir, selected_frames, cameras):
-    track_info, track_camera_visible, trajectory = load_track(datadir)
+def get_obj_pose_tracking(datadir, selected_frames, cameras, load_interpolated):
+    track_info, track_camera_visible, trajectory = load_track(datadir, load_interpolated=load_interpolated)
     object_ids_path = os.path.join(datadir, 'track/track_ids.json')
     with open(object_ids_path, 'r') as f:
         object_ids = json.load(f)
@@ -109,7 +109,7 @@ def generate_dataparser_outputs(
     datadir,
     selected_frames=None,
     cameras=[0, 1, 2, 3, 4],
-    load_interpolated=True,
+    load_interpolated=False,
 ):
     # load calibration and ego pose
     intrinsics, extrinsics, ego_frame_poses, ego_cam_poses = load_camera_info(datadir, load_interpolated)
@@ -189,6 +189,7 @@ def generate_dataparser_outputs(
         datadir,
         selected_frames,
         cameras,
+        load_interpolated
     )
 
     # object_tracklets_vehicle: [num_frames, max_obj_per_frame, [x, y, z, heading, valid]]

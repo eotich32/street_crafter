@@ -173,7 +173,7 @@ def interpolate_novel_views(cameras, interpolation_points):
 def build_rotation_matrix(rotations):
     out = np.eye(3)
     for r in rotations:
-        c, s = math.cos(r['rotate']), math.sin(r['rotate'])
+        c, s = math.cos(math.radians(r['rotate'])), math.sin(math.radians(r['rotate']))
         if r['axis'] == 'y':
             out = out.dot(np.array([
                 [c, 0, -s],
@@ -197,7 +197,9 @@ def build_rotation_matrix(rotations):
 
 def build_img_id(mode):
     tag = ''
-    if mode['shift'] != 0: tag += f'_shift_{mode["shift"]:.2f}'
+    if 'shift' in mode and mode['shift'] != 0: tag += f'_shift_{mode["shift"]:.2f}'
+    elif 'translation' in mode:
+        tag += f'_shift_x_{mode["translation"]["x"]:.2f}_y_{mode["translation"]["y"]:.2f}_z_{mode["translation"]["z"]:.2f}'
     for r in mode['rotations']:
         tag += f'_rotate_{r["axis"]}_{int(r["rotate"])}'
     return tag
@@ -211,14 +213,8 @@ def waymo_novel_view_cameras(cameras: List[CameraInfo], ego_frame_poses, obj_inf
         shifts = [x for x in shifts if x != 0]
     for shift in shifts:
         modes.append({'shift': shift, 'rotations': [{'axis':'z', 'rotate': 0.0}]})
-    # rotates = cfg.render.novel_view.rotate if isinstance(cfg.render.novel_view.rotate, list) else [cfg.render.novel_view.rotate]
-    # rotates = [x for x in rotates if x != 0]
-    # for rotate in rotates:
-    #     modes.append({'shift': 0, 'rotate': rotate})
-    # modes.append({'shift':50, 'custom':True, 'rotations': [{'axis': 'y','rotate': -90}]})
-    # modes.append({'shift':50, 'custom':True, 'rotations': [{'axis': 'y','rotate': -45}]})
-    # modes.append({'shift':20, 'custom':True, 'rotations': [{'axis': 'x','rotate': -45}, {'axis': 'y','rotate': -45}]})
-    # modes.append({'shift':20, 'custom':True, 'rotations': [{'axis': 'x','rotate': 45}, {'axis': 'y','rotate': -45}]})
+    # 自定义新视角模式：translation为平称，x前向为正，y向左为正，z向上为正；rotations为绕各轴依次旋转，单位为角度
+    modes.append({'custom':True, 'translation': {'x':0,'y':3,'z':0}, 'rotations': [{'axis': 'y','rotate': 0}]})
 
     novel_view_cameras = []
     skip_count = 0
@@ -233,7 +229,6 @@ def waymo_novel_view_cameras(cameras: List[CameraInfo], ego_frame_poses, obj_inf
             image_name = novel_view_camera.image_name
 
             # make novel view path
-            shift = mode['shift']
             tag = build_img_id(mode)
             novel_view_dir = os.path.join(cfg.source_path, 'lidar', f'color_render{tag}')
             novel_view_image_name = f'{image_name}{tag}.png'
@@ -254,11 +249,13 @@ def waymo_novel_view_cameras(cameras: List[CameraInfo], ego_frame_poses, obj_inf
 
             # shift
             if 'custom' in mode.keys():
-                ego_pose[2, 3] += shift
+                ego_pose[0, 3] += mode['translation']['x']
+                ego_pose[1, 3] += mode['translation']['y']
+                ego_pose[2, 3] += mode['translation']['z']
             else:
                 shift_direction = get_lane_shift_direction_waymo(ego_frame_poses, frame)
                 scene_idx = os.path.split(cfg.source_path)[-1]
-                ego_pose[:3, 3] += shift_direction * shift * LANE_SHIFT_SIGN_WAYMO[scene_idx]
+                ego_pose[:3, 3] += shift_direction * mode['shift'] * LANE_SHIFT_SIGN_WAYMO[scene_idx]
 
             # rotate
             rot = build_rotation_matrix(mode['rotations'])
