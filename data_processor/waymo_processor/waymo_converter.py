@@ -11,6 +11,7 @@ import pickle
 import tensorflow as tf
 from PIL import Image
 from tqdm import tqdm
+from google.protobuf.json_format import MessageToDict
 
 sys.path.append(os.getcwd())
 from waymo_open_dataset import label_pb2
@@ -75,6 +76,11 @@ def parse_seq_rawdata(process_list, seq_path, seq_save_dir, skip_existing):
         for frame_id, data in tqdm(enumerate(datafile)):
             frame = dataset_pb2.Frame() 
             frame.ParseFromString(bytearray(data.numpy()))
+            if len(frame.map_features) > 0:
+                print(f'Frame {frame_id} has {len(frame.map_features)} map features, dumping to map_features.json')
+                with open(os.path.join(seq_save_dir, f"map_features_{frame_id}.json"), 'w') as f:
+                    json_obj = [MessageToDict(x, preserving_proto_field_name=True) for x in frame.map_features]
+                    json.dump(json_obj, f, indent=1)
             pose = np.array(frame.pose.transform).reshape(4, 4)
             np.savetxt(os.path.join(ego_pose_save_dir, f"{str(frame_id).zfill(6)}.txt"), pose)
             timestamp['FRAME'][str(frame_id).zfill(6)] = frame.timestamp_micros / 1e6        
@@ -295,7 +301,7 @@ def parse_seq_rawdata(process_list, seq_path, seq_save_dir, skip_existing):
                 images[dataset_pb2.CameraName.FRONT_RIGHT]], axis=1)
             track_vis_imgs.append(track_vis_img)
 
-        ego_frame_poses, _ = load_ego_poses(seq_save_dir)
+        ego_frame_poses, _ = load_ego_poses(seq_save_dir, False)
 
         # reset information for trajectory 
         # poses, stationary, symmetric, deformable
@@ -398,7 +404,7 @@ def parse_seq_rawdata(process_list, seq_path, seq_save_dir, skip_existing):
         lidar_dir_depth = os.path.join(lidar_dir, 'depth')
         os.makedirs(lidar_dir_depth, exist_ok=True)
         
-        track_info, track_camera_visible, trajectory = load_track(seq_save_dir, interpolated_first=False)
+        track_info, track_camera_visible, trajectory = load_track(seq_save_dir, load_interpolated=False)
         extrinsics, intrinsics = load_calibration(seq_save_dir)
 
         pointcloud_actor = dict()
@@ -426,7 +432,7 @@ def parse_seq_rawdata(process_list, seq_path, seq_save_dir, skip_existing):
     else:
         os.makedirs(dynamic_mask_dir, exist_ok=True)
         print("Processing dynamic mask...")
-        track_info, track_camera_visible, trajectory = load_track(seq_save_dir, interpolated_first=False)
+        track_info, track_camera_visible, trajectory = load_track(seq_save_dir, load_interpolated=False)
         extrinsics, intrinsics = load_calibration(seq_save_dir)
         for frame, track_info_frame in track_info.items():
             track_camera_visible_cur_frame = track_camera_visible[frame]
@@ -470,7 +476,7 @@ def parse_seq_rawdata(process_list, seq_path, seq_save_dir, skip_existing):
 def main():
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('--process_list', type=str, nargs='+', default=['pose', 'calib', 'image', 'track', 'track_old', 'lidar', 'dynamic'])
+    parser.add_argument('--process_list', type=str, nargs='+', default=['pose', 'calib', 'image', 'track', 'lidar', 'dynamic'])
     # parser.add_argument('--process_list', type=str, nargs='+', default=['pose', 'calib', 'image', 'track'])
     parser.add_argument('--root_dir', type=str, default='/nas/home/yanyunzhi/waymo/training')
     parser.add_argument('--save_dir', type=str, default='./test_data/')
