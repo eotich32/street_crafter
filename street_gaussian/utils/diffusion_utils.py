@@ -533,7 +533,7 @@ class ImageDiffusionRunner():
                     output_image = output_image.transpose(2, 0, 1)  # 转换后形状为 (3, 576, 1024)
                     output_image = torch.from_numpy(output_image)
 
-                    camera.meta['diffusion_original_image'] = output_image
+                    camera.meta['diffusion_original_image'] = output_image.to('cuda', non_blocking=True)
 
         return diffusion_results # empty list 
 

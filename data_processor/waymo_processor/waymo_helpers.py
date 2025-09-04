@@ -74,7 +74,7 @@ def get_object(object_list, name):
     return object_list[0]
 
 
-def load_track(seq_save_dir, load_interpolated=True):
+def load_track(seq_save_dir, load_interpolated=False):
     if load_interpolated:
         track_dir = os.path.join(seq_save_dir, 'interpolated_track')
     else:
@@ -98,7 +98,7 @@ def load_track(seq_save_dir, load_interpolated=True):
 # load ego pose and camera calibration(extrinsic and intrinsic)
 
 
-def load_ego_poses(datadir, load_interpolated=True, camera_count=5):
+def load_ego_poses(datadir, load_interpolated=False, camera_count=5):
     if load_interpolated:
         ego_pose_dir = os.path.join(datadir, 'interpolated_ego_pose')
     else:

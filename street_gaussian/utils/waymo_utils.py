@@ -95,6 +95,8 @@ def get_obj_pose_tracking(datadir, selected_frames, cameras, load_interpolated):
                 id = object_info['id']
                 track_id = object_info['track_id']
                 track_info_frame = track_info[f'{frame:06d}']
+                if track_id not in track_info_frame:
+                    continue
                 track_info_obj = track_info_frame[track_id]['lidar_box']
                 box_info = [track_info_obj['center_x'], track_info_obj['center_y'], track_info_obj['center_z'], track_info_obj['heading'], 1]
                 objects_tracklets_vehicle[frame_idx, id] = np.array(box_info)
