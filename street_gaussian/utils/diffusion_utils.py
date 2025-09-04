@@ -314,8 +314,8 @@ class WaymoDiffusionRunner(DiffusionRunner):
                 batch['training_free_guidance'] = False
                 batch['masked_guidance'] = False
             print(guide_seq_path_sample)
-            #diffusion_output = self.scene.diffusion.forward(batch, scale, cond_indices=[0])  # type: ignore
-            #diffusion_result[start_idx:end_idx] = diffusion_output[1:]  # (f, 3, h, w)
+            diffusion_output = self.scene.diffusion.forward(batch, scale, cond_indices=[0])  # type: ignore
+            diffusion_result[start_idx:end_idx] = diffusion_output[1:]  # (f, 3, h, w)
             filled[start_idx:end_idx] = True
 
         assert filled.all(), 'Not all frames are passed through the prior'
@@ -334,7 +334,7 @@ class WaymoDiffusionRunner(DiffusionRunner):
                 save_path = save_path.replace('.png', f'_scale{scale}.png') if scale < 1.0 else save_path
 
                 if scale == 1.0 or scale == 0.3:
-                    cv2.imwrite(save_path, diffusion_image)                #if scale == 1.0 or scale == 0.3:
+                    cv2.imwrite(save_path, diffusion_image)
                 #cv2.imwrite(save_path, diffusion_image)
                 # original_path = camera.meta['guidance_rgb_path']
                 # modified_path = original_path.replace('color', 'prior')
