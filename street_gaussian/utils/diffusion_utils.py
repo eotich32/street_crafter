@@ -226,7 +226,7 @@ class WaymoDiffusionRunner(DiffusionRunner):
                 diffusion_save_dir = os.path.join(cfg.model_path, 'diffusion')
                 os.makedirs(diffusion_save_dir, exist_ok=True)
                 save_path = os.path.join(diffusion_save_dir, camera.image_name)
-                save_path = save_path + '.png' if '.png' not in save_path else save_path
+                save_path = save_path + f'.{cfg.data.get("img_format", "png")}' if f'.{cfg.data.get("img_format", "png")}' not in save_path else save_path
                 cv2.imwrite(save_path, diffusion_image)
 
         diffusion_result = torch.stack([diffusion_result[frames.index(f)] for f in test_frames])
@@ -330,8 +330,8 @@ class WaymoDiffusionRunner(DiffusionRunner):
                 diffusion_save_dir = os.path.join(cfg.model_path, 'diffusion')
                 os.makedirs(diffusion_save_dir, exist_ok=True)
                 save_path = os.path.join(diffusion_save_dir, camera.image_name)
-                save_path = save_path + '.png' if '.png' not in save_path else save_path
-                save_path = save_path.replace('.png', f'_scale{scale}.png') if scale < 1.0 else save_path
+                save_path = save_path + f'.{cfg.data.get("img_format", "png")}' if f'.{cfg.data.get("img_format", "png")}' not in save_path else save_path
+                save_path = save_path.replace(f'.{cfg.data.get("img_format", "png")}', f'_scale{scale}.{cfg.data.get("img_format", "png")}') if scale < 1.0 else save_path
 
                 if scale == 1.0 or scale == 0.3:
                     cv2.imwrite(save_path, diffusion_image)
@@ -491,10 +491,10 @@ class ImageDiffusionRunner():
                 ref_pil = img_trans(x_combined[0].cpu())
 
             save_path = os.path.join(diffusion_save_dir, camera.image_name)
-            save_path = save_path + '.png' if '.png' not in save_path else save_path
+            save_path = save_path + f'.{cfg.data.get("img_format", "png")}' if f'.{cfg.data.get("img_format", "png")}' not in save_path else save_path
             #torchvision.utils.save_image(render_result, save_path)
             output_pil.save(save_path)
-            ref_pil.save(save_path.replace('.png', '_ref.png'))
+            ref_pil.save(save_path.replace(f'.{cfg.data.get("img_format", "png")}', f'_ref.{cfg.data.get("img_format", "png")}'))
             #assert "000020" not in camera.image_name, "Debug"
             # if self.difix_pipeline is not None:
             #     with torch.no_grad():
@@ -526,7 +526,7 @@ class ImageDiffusionRunner():
                     ref_image = ref_image.resize((1024, 576), Image.LANCZOS)
                     output_image = difix_pipeline(prompt, image=input_image, ref_image=ref_image, num_inference_steps=1, timesteps=[199], guidance_scale=0.0).images[0]
                     save_path = os.path.join(diffusion_save_dir, camera.image_name)
-                    save_path = save_path + '.png' if '.png' not in save_path else save_path
+                    save_path = save_path + f'.{cfg.data.get("img_format", "png")}' if f'.{cfg.data.get("img_format", "png")}' not in save_path else save_path
                     output_image.save(save_path)
                     output_image = np.array(output_image, dtype=np.float32)  # 形状为 (576, 1024, 3)
                     output_image = output_image / 255.0

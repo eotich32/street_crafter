@@ -4,7 +4,7 @@ import numpy as np
 import cv2
 from PIL import Image
 
-def save_img_torch(x, name='out.png'):
+def save_img_torch(x, name=f'out.{cfg.data.get("img_format", "png")}'):
     x = (x.clamp(0., 1.).detach().cpu().numpy() * 255).astype(np.uint8)
     if x.shape[0] == 1 or x.shape[0] == 3:
         x = x.transpose(1, 2, 0)
@@ -14,7 +14,7 @@ def save_img_torch(x, name='out.png'):
     img = Image.fromarray(x)
     img.save(name)
     
-def save_img_numpy(x, name='out.png'):
+def save_img_numpy(x, name=f'out.{cfg.data.get("img_format", "png")}'):
     x = (x.clip(0., 1.) * 255).astype(np.uint8)
     if x.shape[0] == 1 or x.shape[0] == 3:
         x = x.transpose(1, 2, 0)
@@ -122,14 +122,14 @@ def vertical_concate(inp0, inp1):
 
 def save_image(pred, gt, save_dir, save_name, concat=False):
     if gt is None:
-        cv2.imwrite('{}/{}.png'.format(save_dir, save_name), to8b(rgb_to_bgr(pred)))
+        cv2.imwrite(f'{save_dir}/{save_name}.cfg.data.get("img_format", "png")', to8b(rgb_to_bgr(pred)))
     else:
         if concat:
             img = horizon_concate(pred, gt)
-            cv2.imwrite('{}/{}.png'.format(save_dir, save_name), to8b(rgb_to_bgr(img)))
+            cv2.imwrite(f'{save_dir}/{save_name}.cfg.data.get("img_format", "png")', to8b(rgb_to_bgr(img)))
         else: 
-            cv2.imwrite('{}/{}.png'.format(save_dir, save_name), to8b(rgb_to_bgr(pred)))
-            cv2.imwrite('{}/{}_gt.png'.format(save_dir, save_name), to8b(rgb_to_bgr(gt)))
+            cv2.imwrite(f'{save_dir}/{save_name}.cfg.data.get("img_format", "png")', to8b(rgb_to_bgr(pred)))
+            cv2.imwrite(f'{save_dir}/{save_name}_gt.cfg.data.get("img_format", "png")', to8b(rgb_to_bgr(gt)))
     
 def transparent_cmap(cmap):
     """Copy colormap and set alpha values"""

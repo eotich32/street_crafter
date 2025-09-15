@@ -141,7 +141,7 @@ def interpolate_novel_views(cameras, interpolation_points):
                 # 创建新视角路径
                 tag = f'_interp_{i}_{j}'
                 novel_view_dir = os.path.join(cfg.source_path, 'lidar', f'color_render{tag}')
-                novel_view_image_name = f'{image_name}{tag}.png'
+                novel_view_image_name = f'{image_name}{tag}.{cfg.data.get("img_format", "png")}'
 
                 metadata = novel_view_camera.metadata
                 metadata['is_novel_view'] = True
@@ -152,9 +152,9 @@ def interpolate_novel_views(cameras, interpolation_points):
                 # 更新帧号为插值位置
                 metadata['frame'] = int(frame + t * (meta2['frame'] - frame))
 
-                novel_view_rgb_path = os.path.join(novel_view_dir, f'{str(metadata["frame"]).zfill(6)}_{cam_id}.png')
+                novel_view_rgb_path = os.path.join(novel_view_dir, f'{str(metadata["frame"]).zfill(6)}_{cam_id}.{cfg.data.get("img_format", "png")}')
                 novel_view_mask_path = os.path.join(novel_view_dir,
-                                                    f'{str(metadata["frame"]).zfill(6)}_{cam_id}_mask.png')
+                                                    f'{str(metadata["frame"]).zfill(6)}_{cam_id}_mask.{cfg.data.get("img_format", "png")}')
 
                 metadata['guidance_rgb_path'] = novel_view_rgb_path
                 metadata['guidance_mask_path'] = novel_view_mask_path
@@ -231,14 +231,14 @@ def waymo_novel_view_cameras(cameras: List[CameraInfo], ego_frame_poses, obj_inf
             # make novel view path
             tag = build_img_id(mode)
             novel_view_dir = os.path.join(cfg.source_path, 'lidar', f'color_render{tag}')
-            novel_view_image_name = f'{image_name}{tag}.png'
+            novel_view_image_name = f'{image_name}{tag}.{cfg.data.get("img_format", "png")}'
             metadata = novel_view_camera.metadata
             metadata['is_novel_view'] = True
             metadata['ref_frame_image'] = novel_view_camera.image_path
             metadata['novel_view_id'] = tag
             cam, frame = metadata['cam'], metadata['frame']
-            novel_view_rgb_path = os.path.join(novel_view_dir, f'{str(frame).zfill(6)}_{cam}.png')
-            novel_view_mask_path = os.path.join(novel_view_dir, f'{str(frame).zfill(6)}_{cam}_mask.png')
+            novel_view_rgb_path = os.path.join(novel_view_dir, f'{str(frame).zfill(6)}_{cam}.{cfg.data.get("img_format", "png")}')
+            novel_view_mask_path = os.path.join(novel_view_dir, f'{str(frame).zfill(6)}_{cam}_mask.{cfg.data.get("img_format", "png")}')
             metadata['guidance_rgb_path'] = novel_view_rgb_path
             metadata['guidance_mask_path'] = novel_view_mask_path
 
@@ -308,13 +308,13 @@ def append_interpolated_novel_view(novel_view_cam_infos, cameras, obj_info, came
         # make novel view path
         tag = '_interpolated'
         novel_view_dir = os.path.join(cfg.source_path, 'lidar', f'color_render{tag}')
-        novel_view_image_name = f'{image_name}{tag}.png'
+        novel_view_image_name = f'{image_name}{tag}.{cfg.data.get("img_format", "png")}'
         metadata = novel_view_camera.metadata
         metadata['is_novel_view'] = True
         metadata['novel_view_id'] = tag
         cam, frame = metadata['cam'], metadata['frame']
-        novel_view_rgb_path = os.path.join(novel_view_dir, f'{str(frame).zfill(6)}_{cam}.png')
-        novel_view_mask_path = os.path.join(novel_view_dir, f'{str(frame).zfill(6)}_{cam}_mask.png')
+        novel_view_rgb_path = os.path.join(novel_view_dir, f'{str(frame).zfill(6)}_{cam}.{cfg.data.get("img_format", "png")}')
+        novel_view_mask_path = os.path.join(novel_view_dir, f'{str(frame).zfill(6)}_{cam}_mask.{cfg.data.get("img_format", "png")}')
         metadata['guidance_rgb_path'] = novel_view_rgb_path
         metadata['guidance_mask_path'] = novel_view_mask_path
 
@@ -381,8 +381,8 @@ def pandaset_novel_view_cameras(cameras: List[CameraInfo], cam_poses, obj_info, 
             else:
                 novel_view_dir = os.path.join(cfg.source_path, 'lidar_forward', f'color_render_shift_{shift:.2f}')
             cam, frame = metadata['cam'], metadata['frame']
-            novel_view_rgb_path = os.path.join(novel_view_dir, f'{str(frame).zfill(3)}_{cam}.png')
-            novel_view_mask_path = os.path.join(novel_view_dir, f'{str(frame).zfill(3)}_{cam}_mask.png')
+            novel_view_rgb_path = os.path.join(novel_view_dir, f'{str(frame).zfill(3)}_{cam}.{cfg.data.get("img_format", "png")}')
+            novel_view_mask_path = os.path.join(novel_view_dir, f'{str(frame).zfill(3)}_{cam}_mask.{cfg.data.get("img_format", "png")}')
             metadata['guidance_rgb_path'] = novel_view_rgb_path
             metadata['guidance_mask_path'] = novel_view_mask_path
             # make novel view camera
@@ -656,9 +656,9 @@ def virtual_warp(
             render_rgb = src_rgb.cpu().numpy()
             wrap_rgb = src_rgb.cpu().numpy()
             mask = np.ones_like(src_rgb.cpu().numpy())
-            wrap_rgb_path = os.path.join(save_dir, f'{i:04d}_condition.png')
-            render_rgb_path = os.path.join(save_dir, f'{i:04d}.png')
-            mask_path = os.path.join(save_dir, f'{i:04d}_mask.png')
+            wrap_rgb_path = os.path.join(save_dir, f'{i:04d}_condition.{cfg.data.get("img_format", "png")}')
+            render_rgb_path = os.path.join(save_dir, f'{i:04d}.{cfg.data.get("img_format", "png")}')
+            mask_path = os.path.join(save_dir, f'{i:04d}_mask.{cfg.data.get("img_format", "png")}')
             cv2.imwrite(wrap_rgb_path, cv2.cvtColor((wrap_rgb * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
             cv2.imwrite(render_rgb_path, cv2.cvtColor((render_rgb * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
             cv2.imwrite(mask_path, (mask * 255).astype(np.uint8))
@@ -717,9 +717,9 @@ def virtual_warp(
         render_rgb = tar_rgbs[i].cpu().numpy()
         wrap_rgb = wrap_rgbs[i].cpu().numpy()
         mask = masks[i].cpu().numpy()
-        render_rgb_path = os.path.join(save_dir, f'{i+1:04d}.png')
-        wrap_rgb_path = os.path.join(save_dir, f'{i+1:04d}_condition.png')
-        mask_path = os.path.join(save_dir, f'{i+1:04d}_mask.png')
+        render_rgb_path = os.path.join(save_dir, f'{i+1:04d}.{cfg.data.get("img_format", "png")}')
+        wrap_rgb_path = os.path.join(save_dir, f'{i+1:04d}_condition.{cfg.data.get("img_format", "png")}')
+        mask_path = os.path.join(save_dir, f'{i+1:04d}_mask.{cfg.data.get("img_format", "png")}')
         cv2.imwrite(wrap_rgb_path, cv2.cvtColor((wrap_rgb * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
         cv2.imwrite(render_rgb_path, cv2.cvtColor((render_rgb * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
         cv2.imwrite(mask_path, (mask * 255).astype(np.uint8))
