@@ -166,7 +166,7 @@ class WaymoPointCloudProcessor(BasePointCloudProcessor):
             sky_mask_paths = sorted([x for x in os.listdir(sky_mask_dir) if x.endswith('.png')])
             sky_mask_paths = [os.path.join(sky_mask_dir, x) for x in sky_mask_paths if self.check_file_path(x)]
             sky_mask_lists = [(cv2.imread(sky_mask_path)[..., 0] > 0).reshape(-1) for sky_mask_path in sky_mask_paths]
-            sky_pixel_all = np.sum(np.stack(sky_mask_lists, axis=0))
+            #sky_pixel_all = np.sum(np.stack(sky_mask_lists, axis=0))
 
             for i, sky_mask_path in enumerate(sky_mask_paths):
                 basename = os.path.basename(sky_mask_path)

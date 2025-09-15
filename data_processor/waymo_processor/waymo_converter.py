@@ -249,15 +249,15 @@ def parse_seq_rawdata(process_list, seq_path, seq_save_dir, skip_existing):
                 trajectory_info[label_id][f'{frame_id:06d}'] = lidar_synced_box
                 
                 # Camera-synced box
-                if label.camera_synced_box.ByteSize():            
+                if True:#label.camera_synced_box.ByteSize(): TODO
                     camera_synced_box = dict()
-                    camera_synced_box['height'] = label.camera_synced_box.height
-                    camera_synced_box['width'] = label.camera_synced_box.width
-                    camera_synced_box['length'] = label.camera_synced_box.length
-                    camera_synced_box['center_x'] = label.camera_synced_box.center_x
-                    camera_synced_box['center_y'] = label.camera_synced_box.center_y
-                    camera_synced_box['center_z'] = label.camera_synced_box.center_z
-                    camera_synced_box['heading'] = label.camera_synced_box.heading
+                    camera_synced_box['height'] = label.box.height
+                    camera_synced_box['width'] = label.box.width
+                    camera_synced_box['length'] = label.box.length
+                    camera_synced_box['center_x'] = label.box.center_x
+                    camera_synced_box['center_y'] = label.box.center_y
+                    camera_synced_box['center_z'] = label.box.center_z
+                    camera_synced_box['heading'] = label.box.heading
                     camera_synced_box['label'] = obj_class
                     camera_synced_box['speed'] = speed
                     track_info_cur_frame[label_id]['camera_box'] = camera_synced_box

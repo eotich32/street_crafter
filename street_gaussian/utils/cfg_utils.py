@@ -55,7 +55,7 @@ def parse_cfg(cfg, args):
         print('Model path already exists, this would override original model')
         print(f"model_path: {cfg.model_path}")
 
-    cfg.trained_model_dir = os.path.join(cfg.model_path, 'trained_model')
+    cfg.trained_model_dir = os.path.join(cfg.model_path, cfg.get('pth_path', 'trained_model'))
     cfg.point_cloud_dir = os.path.join(cfg.model_path, 'point_cloud')
 
     # data directory
