@@ -120,7 +120,7 @@ def generate_dataparser_outputs(
         image_dir = os.path.join(datadir, 'interpolated_images')
     else:
         image_dir = os.path.join(datadir, 'images')
-    image_filenames_all = sorted(glob(os.path.join(image_dir, '*.png')))
+    image_filenames_all = sorted(glob(os.path.join(image_dir, f'*.{cfg.data.get("img_format", "png")}')))
     num_frames_all = len(ego_frame_poses)
 
     if selected_frames is None:
