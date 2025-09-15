@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import cv2
 from PIL import Image
+from street_gaussian.config import cfg
 
 def save_img_torch(x, name=f'out.{cfg.data.get("img_format", "png")}'):
     x = (x.clamp(0., 1.).detach().cpu().numpy() * 255).astype(np.uint8)
