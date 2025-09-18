@@ -87,7 +87,6 @@ def write_intrinsics(out_path, intri_list):
 
 def check_anno_visible(sample_token, camera_name, ann):
     sample = nusc.get('sample', sample_token)
-    camera_name = 'CAM_' + camera_name
     cam_data = nusc.get('sample_data', sample['data'][camera_name])
     # 加载图像
     image_path = os.path.join(nusc.dataroot, cam_data['filename'])
@@ -142,7 +141,7 @@ def load_ego_poses(datadir):
     ego_pose_dir = os.path.join(datadir, 'ego_pose')
     assert os.path.exists(ego_pose_dir), 'Ego pose dir not found.'
     ego_frame_poses = []
-    ego_cam_poses = [[] for i in range(5)]
+    ego_cam_poses = [[] for i in range(len(notr_cam_names))]
     ego_pose_paths = sorted(os.listdir(ego_pose_dir))
     for ego_pose_path in ego_pose_paths:
 
@@ -160,7 +159,7 @@ def load_ego_poses(datadir):
     center_point = np.mean(ego_frame_poses[:, :3, 3], axis=0)
     ego_frame_poses[:, :3, 3] -= center_point  # [num_frames, 4, 4]
 
-    ego_cam_poses = [np.array(ego_cam_poses[i]) for i in range(5)]
+    ego_cam_poses = [np.array(ego_cam_poses[i]) for i in range(len(notr_cam_names))]
     ego_cam_poses = np.array(ego_cam_poses)
     ego_cam_poses[:, :, :3, 3] -= center_point  # [5, num_frames, 4, 4]
     return ego_frame_poses, ego_cam_poses
@@ -356,9 +355,6 @@ def process_scene_lidar(nusc: NuScenes, scene_record: dict, save_dir_scene: str,
 
     track_info, track_camera_visible, trajectory = load_track(save_dir_scene)
 
-    #camera_channels = ['CAM_FRONT', 'CAM_FRONT_LEFT', 'CAM_FRONT_RIGHT', 'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT']
-    camera_channels = ['CAM_FRONT', 'CAM_FRONT_LEFT', 'CAM_FRONT_RIGHT', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT']
-
     num_samples_in_scene = scene_record['nbr_samples']
     pbar_samples = tqdm(total=num_samples_in_scene, desc=f"Scene {scene_record['name']}")
 
@@ -380,7 +376,7 @@ def process_scene_lidar(nusc: NuScenes, scene_record: dict, save_dir_scene: str,
         points_rgb = np.zeros((num_pts, 3), dtype=np.uint8) # Store as 0-255 uint8
         points_colored_this_frame_mask = np.zeros(num_pts, dtype=bool) # Mask for if a point has been colored by ANY camera
 
-        for cam_idx, cam_channel in enumerate(camera_channels):
+        for cam_idx, cam_channel in enumerate(nuscenes_cam_names):
             cam_sd_token = sample_record['data'][cam_channel]
             cam_sd_record = nusc.get('sample_data', cam_sd_token)
             cam_path = nusc.get_sample_data_path(cam_sd_token)
@@ -528,22 +524,29 @@ def process_scene_lidar(nusc: NuScenes, scene_record: dict, save_dir_scene: str,
             storePly(ply_actor_full_path, all_actor_xyz_global, all_actor_rgb, full_actor_mask)
     #print(f"Finished processing scene {scene_record['name']}")
 
-time_stamp_dict = {"FRAME":{}, "FRONT_LEFT":{}, "FRONT_RIGHT":{}, "FRONT":{}, "SIDE_LEFT":{}, "SIDE_RIGHT":{}}
-cam_list = ['CAM_FRONT', 'CAM_FRONT_LEFT', 'CAM_FRONT_RIGHT', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT']
-cam_name_list = ['FRONT', 'FRONT_LEFT', 'FRONT_RIGHT', 'SIDE_LEFT', 'SIDE_RIGHT']
+notr_cam_names = ['FRONT', 'FRONT_LEFT', 'FRONT_RIGHT', 'SIDE_LEFT', 'SIDE_RIGHT', 'BACK']
+time_stamp_dict = {"FRAME":{}}
+for n in notr_cam_names:
+    time_stamp_dict[n] = {}
+nuscenes_cam_names = ['CAM_FRONT', 'CAM_FRONT_LEFT', 'CAM_FRONT_RIGHT', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT', 'CAM_BACK']
 
-output_raw_dir = '/home/george/nuscene/nuscenes85'
-data_path = "/home/george/nuscene/data/v1.0-trainval"
-nusc = NuScenes(version='v1.0-trainval', dataroot=data_path, verbose=True)
+data_path = '/mnt/data/dataset/nuscenes/nuScenes_raw/v1.0-trainval'
+version='v1.0-trainval'
+output_raw_dir = '/mnt/data/dataset/nuscenes/v1.0-trainval_notr'
+# output_raw_dir = r'D:\Projects\3dgs_datas\dataset\nuscenes/mini-converted'
+nusc = NuScenes(version=version, dataroot=data_path, verbose=True)
 
-for scene_idx in tqdm(range(85, len(nusc.scene))):
+for scene_idx in tqdm(range(0, len(nusc.scene))):
     start_token = nusc.scene[scene_idx]['first_sample_token']
     scene_name = str(int(nusc.scene[scene_idx]['name'].split('-')[1])).zfill(3)
+    if scene_name != '995':
+        continue
+
     output_scene_dir = os.path.join(output_raw_dir, scene_name)
 
     # 检查场景数据是否存在
     sample = nusc.get('sample', start_token)
-    cam_data = nusc.get('sample_data', sample['data'][cam_list[0]])
+    cam_data = nusc.get('sample_data', sample['data'][nuscenes_cam_names[0]])
     ori_img_path = os.path.join(data_path, cam_data['filename'])
     if not os.path.exists(ori_img_path):
         #print(f"{ori_img_path} does not exist!")
@@ -557,16 +560,9 @@ for scene_idx in tqdm(range(85, len(nusc.scene))):
         #frame_idx加上前导0补全为6位
         frame_idx_str = str(frame_idx).zfill(6)
         time_stamp_dict['FRAME'][frame_idx_str] = process_time(sample['timestamp'])
-        cam_front_data = nusc.get('sample_data', sample['data'][cam_list[0]])
-        time_stamp_dict[cam_name_list[0]][frame_idx_str] = process_time(cam_front_data['timestamp'])
-        cam_front_left_data = nusc.get('sample_data', sample['data'][cam_list[1]])
-        time_stamp_dict[cam_name_list[1]][frame_idx_str] = process_time(cam_front_left_data['timestamp'])
-        cam_front_right_data = nusc.get('sample_data', sample['data'][cam_list[2]])
-        time_stamp_dict[cam_name_list[2]][frame_idx_str] = process_time(cam_front_right_data['timestamp'])
-        cam_side_left_data = nusc.get('sample_data', sample['data'][cam_list[3]])
-        time_stamp_dict[cam_name_list[3]][frame_idx_str] = process_time(cam_side_left_data['timestamp'])
-        cam_side_right_data = nusc.get('sample_data', sample['data'][cam_list[4]])
-        time_stamp_dict[cam_name_list[4]][frame_idx_str] = process_time(cam_side_right_data['timestamp'])
+        for i in range(len(notr_cam_names)):
+            cam_front_data = nusc.get('sample_data', sample['data'][nuscenes_cam_names[i]])
+            time_stamp_dict[notr_cam_names[i]][frame_idx_str] = process_time(cam_front_data['timestamp'])
         start_token = sample['next']
         frame_idx += 1
     store_json_path = os.path.join(output_scene_dir, 'timestamps.json')
@@ -580,10 +576,10 @@ for scene_idx in tqdm(range(85, len(nusc.scene))):
     while start_token != '':
         sample = nusc.get('sample', start_token)
         frame_idx_str = str(frame_idx).zfill(6)
-        for i in range(len(cam_list)):
-            cam_data = nusc.get('sample_data', sample['data'][cam_list[i]])
+        for i in range(len(nuscenes_cam_names)):
+            cam_data = nusc.get('sample_data', sample['data'][nuscenes_cam_names[i]])
             ori_img_path = os.path.join(data_path, cam_data['filename'])
-            img_path = os.path.join(out_path, f'{frame_idx_str}_{i}.png')
+            img_path = os.path.join(out_path, f'{frame_idx_str}_{i}.jpg')
             cv2.imwrite(img_path, cv2.imread(ori_img_path))
         start_token = sample['next']
         frame_idx += 1
@@ -596,8 +592,8 @@ for scene_idx in tqdm(range(85, len(nusc.scene))):
     while start_token != '':
         sample = nusc.get('sample', start_token)
         frame_idx_str = str(frame_idx).zfill(6)
-        for i in range(len(cam_list)):
-            cam_data = nusc.get('sample_data', sample['data'][cam_list[i]])
+        for i in range(len(nuscenes_cam_names)):
+            cam_data = nusc.get('sample_data', sample['data'][nuscenes_cam_names[i]])
             ego = nusc.get('ego_pose', cam_data['ego_pose_token'])
             ego_matrix = nuscenes_to_waymo(ego)
             ego_out_path = os.path.join(ego_path, f'{frame_idx_str}_{i}.txt')
@@ -614,8 +610,8 @@ for scene_idx in tqdm(range(85, len(nusc.scene))):
     os.makedirs(extrinsics_path, exist_ok=True)
     os.makedirs(intrinsics_path, exist_ok=True)
 
-    for i in range(len(cam_list)):
-        cam_token = sample['data'][cam_list[i]]
+    for i in range(len(nuscenes_cam_names)):
+        cam_token = sample['data'][nuscenes_cam_names[i]]
         cam_data = nusc.get('sample_data', cam_token)
         sensor_token = cam_data['calibrated_sensor_token']
         cam_info = nusc.get('calibrated_sensor', sensor_token)
@@ -644,7 +640,7 @@ for scene_idx in tqdm(range(85, len(nusc.scene))):
         track_camera_visible_cur_frame = dict()
         time_stamp = sample['timestamp'] / 1000000.0
 
-        for i in range(3):
+        for i in range(len(notr_cam_names)):
             track_camera_visible_cur_frame[i] = []
 
         for label_token in sample['anns']:
@@ -710,16 +706,10 @@ for scene_idx in tqdm(range(85, len(nusc.scene))):
             obj_pose_vehicle[:3, 3] = np.array([camera_synced_box['center_x'], camera_synced_box['center_y'], camera_synced_box['center_z']])
 
             camera_visible = []
-            camera_names = ['FRONT_LEFT', 'FRONT', 'FRONT_RIGHT']
-            for camera_name in camera_names:
-                if check_anno_visible(start_token, camera_name, label):
+            for camera_id in range(len(notr_cam_names)):
+                camera_name = notr_cam_names[camera_id]
+                if check_anno_visible(start_token, nuscenes_cam_names[camera_id], label):
                     camera_visible.append(camera_name)
-                    if camera_name =='FRONT':
-                        camera_id = 0
-                    elif camera_name =='FRONT_LEFT':
-                        camera_id = 1
-                    else:
-                        camera_id = 2
                     track_camera_visible_cur_frame[camera_id].append(label_id)
             
         track_info[f'{frame_idx:06d}'] = track_info_cur_frame    
@@ -809,18 +799,18 @@ for scene_idx in tqdm(range(85, len(nusc.scene))):
     while start_token != '':
         sample = viz.nusc.get('sample', start_token)
         frame_idx_str = str(frame_idx).zfill(6)
-        for i in range(len(cam_list)):
-            sav_mask_path = os.path.join(mask_dir, f'{frame_idx_str}_{i}.png')
+        for i in range(len(nuscenes_cam_names)):
+            sav_mask_path = os.path.join(mask_dir, f'{frame_idx_str}_{i}.jpg')
             viz.visualize_sample_2d(
                 start_token, 
-                camera_name=cam_list[i],
+                camera_name=nuscenes_cam_names[i],
                 save_mask=True,
                 mask_dir=sav_mask_path
             )
-            sav_mask_path = os.path.join(mask_dir, f'{frame_idx_str}_{i}_deformable.png') # deformable对应行人目标
+            sav_mask_path = os.path.join(mask_dir, f'{frame_idx_str}_{i}_deformable.jpg') # deformable对应行人目标
             viz.visualize_sample_2d(
                 start_token, 
-                camera_name=cam_list[i],
+                camera_name=nuscenes_cam_names[i],
                 save_mask=True,
                 mask_dir=sav_mask_path,
                 category=1

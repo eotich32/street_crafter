@@ -26,7 +26,7 @@ class WaymoPointCloudProcessor(BasePointCloudProcessor):
         self.end_frame = cfg.data.selected_frames[-1]
 
         # load camera poses
-        self.ego_frame_poses, self.ego_cam_poses = load_ego_poses(self.datadir)
+        self.ego_frame_poses, self.ego_cam_poses = load_ego_poses(self.datadir, camera_count=len(cfg.data.cameras))
 
         # load calibration
         self.extrinsics, self.intrinsics = load_calibration(self.datadir)
@@ -86,7 +86,7 @@ class WaymoPointCloudProcessor(BasePointCloudProcessor):
             for cam in self.cams:
                 K = self.intrinsics[cam]
                 RT = np.linalg.inv(self.extrinsics[cam])
-                _, visible_cam_mask = project_numpy(xyz_vehicle, K, RT, image_heights[cam], image_widths[cam])
+                _, visible_cam_mask = project_numpy(xyz_vehicle, K, RT, cfg.data.get('image_heights', image_heights)[cam], cfg.data.get('image_widths', image_widths)[cam])
                 visible_mask = np.logical_or(visible_mask, visible_cam_mask)
             ply_dict_background_visible[frame] = visible_mask
 
@@ -163,7 +163,7 @@ class WaymoPointCloudProcessor(BasePointCloudProcessor):
             background_sphere_points = 50000    
             background_sphere_distance = 2.5      
             num_samples = background_sphere_points // (len(self.cams) * (self.end_frame - self.start_frame + 1))
-            sky_mask_paths = sorted([x for x in os.listdir(sky_mask_dir) if x.endswith('.png')])
+            sky_mask_paths = sorted([x for x in os.listdir(sky_mask_dir) if x.endswith(f'.{cfg.data.get("img_format", "png")}')])
             sky_mask_paths = [os.path.join(sky_mask_dir, x) for x in sky_mask_paths if self.check_file_path(x)]
             sky_mask_lists = [(cv2.imread(sky_mask_path)[..., 0] > 0).reshape(-1) for sky_mask_path in sky_mask_paths]
             #sky_pixel_all = np.sum(np.stack(sky_mask_lists, axis=0))

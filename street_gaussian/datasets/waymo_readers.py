@@ -166,7 +166,7 @@ def readWaymoInfo(path, images='images', split_train=-1, split_test=-1, **kwargs
             frame = image_filename_to_frame(image_name)
             while image is None:
                 try:
-                    image = Image.open(os.path.join(img_dir, f'{frame:06d}_{cam}.png'))
+                    image = Image.open(os.path.join(img_dir, f'{frame:06d}_{cam}.{cfg.data.get("img_format", "png")}'))
                 except Exception as e:
                     frame -= 1
             # width, height = output['img_resolutions'][cam]['width'], output['img_resolutions'][cam]['height']
@@ -199,14 +199,14 @@ def readWaymoInfo(path, images='images', split_train=-1, split_test=-1, **kwargs
         metadata['timestamp'] = cams_timestamps[i]
         metadata['is_novel_view'] = False
         guidance_dir = os.path.join(cfg.source_path, 'lidar', f'color_render')
-        metadata['guidance_rgb_path'] = os.path.join(guidance_dir, f'{str(frames[i]).zfill(6)}_{cams[i]}.png')
-        metadata['guidance_mask_path'] = os.path.join(guidance_dir, f'{str(frames[i]).zfill(6)}_{cams[i]}_mask.png')
+        metadata['guidance_rgb_path'] = os.path.join(guidance_dir, f'{str(frames[i]).zfill(6)}_{cams[i]}.{cfg.data.get("img_format", "png")}')
+        metadata['guidance_mask_path'] = os.path.join(guidance_dir, f'{str(frames[i]).zfill(6)}_{cams[i]}_mask.{cfg.data.get("img_format", "png")}')
 
         guidance = dict()
 
         # load dynamic mask
         if load_dynamic_mask and (interpolated_frame_mapping is None or interpolated_frame_mapping[str(frames_idx[i])]['is_original']):
-            dynamic_mask_path = os.path.join(dynamic_mask_dir, f'{image_name}.png')
+            dynamic_mask_path = os.path.join(dynamic_mask_dir, f'{image_name}.{cfg.data.get("img_format", "png")}')
             obj_bound = (cv2.imread(dynamic_mask_path)[..., 0]) > 0.
             guidance['obj_bound'] = Image.fromarray(obj_bound)
 
@@ -222,7 +222,7 @@ def readWaymoInfo(path, images='images', split_train=-1, split_test=-1, **kwargs
 
         # load sky mask
         if load_sky_mask and (interpolated_frame_mapping is None or interpolated_frame_mapping[str(frames_idx[i])]['is_original']):
-            sky_mask_path = os.path.join(sky_mask_dir, f'{image_name}.png')
+            sky_mask_path = os.path.join(sky_mask_dir, f'{image_name}.{cfg.data.get("img_format", "png")}')
             sky_mask = (cv2.imread(sky_mask_path)[..., 0]) > 0.
             guidance['sky_mask'] = Image.fromarray(sky_mask)
 

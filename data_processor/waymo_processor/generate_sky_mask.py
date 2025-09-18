@@ -166,6 +166,7 @@ def segment_with_text_prompt(datadir, BOX_TRESHOLD, TEXT_TRESHOLD, ignore_exists
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--datadir', required=True, type=str)
+    parser.add_argument('--num_cameras', required=True, type=int)
     parser.add_argument('--box_threshold', nargs='+', type=float, default=[0.3]) # Change this to your threshold
     parser.add_argument("--text_threshold", type=float, default=0.25)
     parser.add_argument("--ignore_exists", action='store_true')
@@ -176,9 +177,9 @@ if __name__ == "__main__":
 
     assert isinstance(args.box_threshold, list)
     if len(args.box_threshold) == 1:
-        box_threshold = [args.box_threshold[0]] * 5
+        box_threshold = [args.box_threshold[0]] * args.num_cameras
     else:
-        assert len(args.box_threshold) == 5
+        # assert len(args.box_threshold) == 5
         box_threshold = args.box_threshold
     print('box_threshold: ', box_threshold)
         
