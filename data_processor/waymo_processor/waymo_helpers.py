@@ -118,7 +118,8 @@ def load_ego_poses(datadir, load_interpolated=False, camera_count=5):
         else:
             cam = image_filename_to_cam(ego_pose_path)
             ego_cam_pose = np.loadtxt(os.path.join(ego_pose_dir, ego_pose_path))
-            ego_cam_poses[cam].append(ego_cam_pose)
+            if cam < camera_count:
+                ego_cam_poses[cam].append(ego_cam_pose)
 
     # center ego pose
     ego_frame_poses = np.array(ego_frame_poses)

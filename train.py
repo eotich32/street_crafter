@@ -353,10 +353,11 @@ def training():
 
             if iteration % 10 == 0:
                 # Progress bar
+                psnr_this_iter = psnr(image, gt_image, mask).mean().float()
                 if not viewpoint_cam.meta['is_novel_view']:
                     ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
-                    ema_psnr_for_log = 0.4 * psnr(image, gt_image, mask).mean().float() + 0.6 * ema_psnr_for_log
-                progress_bar.set_description(f"Exp: {cfg.task}-{cfg.exp_name}, Loss: {ema_loss_for_log:.{7}f}, PSNR: {ema_psnr_for_log:.{4}f}")
+                    ema_psnr_for_log = 0.4 * psnr_this_iter + 0.6 * ema_psnr_for_log
+                progress_bar.set_description(f"Exp: {cfg.task}-{cfg.exp_name}, Loss: {ema_loss_for_log:.{7}f}, PSNR: {ema_psnr_for_log:.{4}f}, psnr_this_iter: {psnr_this_iter:.{4}f}, num_bg_points: {len(gaussians.background.get_xyz)}")
 
             progress_bar.update(1)
 

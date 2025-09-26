@@ -751,7 +751,7 @@ if __name__ == '__main__':
     timestamp_path = os.path.join(args.notr_scene_path, 'timestamps.json')
     with open(timestamp_path, 'r') as f:
         timestamps = json.load(f)
-    track_infos, track_camera_visible, trajectory = load_track(args.notr_scene_path, interpolated_first=False)
+    track_infos, track_camera_visible, trajectory = load_track(args.notr_scene_path, load_interpolated=False)
     intrinsics, extrinsics, ego_frame_poses, ego_cam_poses = load_camera_info(args.notr_scene_path)
     for i in range(len(extrinsics)):
         extrinsics[i] = np.matmul(extrinsics[i], np.linalg.inv(opencv2camera)) # TODO: waymo要这样，因为和waymo_helpers.py里get_extrinsic有关
