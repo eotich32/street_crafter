@@ -210,11 +210,12 @@ def get_raw_view_loss(gaussians_renderer, phase, gaussians, viewpoint_cam, acc, 
         scalar_dict['color_correction_reg_loss'] = color_correction_reg_loss.item()
         loss += optim_args.lambda_color_correction * color_correction_reg_loss
 
-    if phase == 'low_densification' and pseudo_view_consistency_loss is not None:
+    if phase == 'low_densification':
         depth_loss = edge_aware_smoothness(depth, gt_image)
         range_loss = - (depth.max() - depth.min())
         loss += 0.01 * (depth_loss + 0.001 * range_loss)
-        loss += pseudo_view_consistency_loss
+        if pseudo_view_consistency_loss is not None:
+            loss += pseudo_view_consistency_loss
 
     return scalar_dict, loss, acc
 
@@ -424,7 +425,7 @@ def training():
         profiler_step()
 
         iter_start.record()  # type: ignore
-        if iteration < 100:
+        if iteration < 1500:
             phase = 'warm_up'
         else:
             if iteration % 200 >= 100:
