@@ -29,6 +29,7 @@ from easyvolcap.utils.console_utils import *
 class StreetGaussianModel(nn.Module):
     def __init__(self, metadata):
         super().__init__()
+        self.viewpoint_camera = None
         self.metadata = metadata
 
         self.max_sh_degree = cfg.model.gaussian.sh_degree
@@ -206,7 +207,7 @@ class StreetGaussianModel(nn.Module):
         # Build pose correction
         self.pose_correction: Optional[PoseCorrection] = PoseCorrection(self.metadata) if self.use_pose_correction else None
 
-    def parse_camera(self, camera: Camera):
+    def parse_camera(self, camera):
         # set camera
         self.viewpoint_camera = camera
 

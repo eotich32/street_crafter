@@ -558,5 +558,5 @@ class GaussianModel(nn.Module):
         self.xyz_gradient_accum[update_filter, 0:1] += torch.norm(viewspace_point_tensor_grad[update_filter, :2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
 
-    def parse_camera(self, camera: Camera):
+    def parse_camera(self, camera):
         pass

@@ -3,11 +3,11 @@ import torch
 import random
 import time
 from random import randint
-from create_scene import create_scene, create_scene_for_diffusion_inference
+from create_scene import create_scene, create_scene_for_diffusion_inference, create_scene_with_cooperating_gaussians
 from street_gaussian.models.street_gaussian_model import StreetGaussianModel
 from street_gaussian.models.scene import Scene
 from street_gaussian.models.street_gaussian_renderer import StreetGaussianRenderer
-from street_gaussian.utils.loss_utils import l1_loss, l2_loss, psnr, ssim, huber
+from street_gaussian.utils.loss_utils import l1_loss, l2_loss, psnr, ssim, huber, edge_aware_smoothness
 from street_gaussian.utils.img_utils import save_img_torch, visualize_depth_numpy
 from street_gaussian.utils.general_utils import safe_state
 from street_gaussian.utils.camera_utils import Camera
@@ -150,7 +150,7 @@ def get_novel_view_loss(viewpoint_cam, image, mask, optim_args):
     return scalar_dict, loss, image, mask, gt_image
 
 
-def get_raw_view_loss(gaussians_renderer, gaussians, viewpoint_cam, acc, depth, image, gt_image, mask, sky_mask, obj_bound, iteration, optim_args):
+def get_raw_view_loss(gaussians_renderer, phase, gaussians, viewpoint_cam, acc, depth, image, gt_image, mask, sky_mask, obj_bound, iteration, pseudo_view_consistency_loss, optim_args):
     scalar_dict = dict()
     # rgb loss
     Ll1 = l1_loss(image, gt_image, mask)
@@ -209,10 +209,17 @@ def get_raw_view_loss(gaussians_renderer, gaussians, viewpoint_cam, acc, depth, 
         color_correction_reg_loss = gaussians.color_correction.regularization_loss(viewpoint_cam)  # type: ignore
         scalar_dict['color_correction_reg_loss'] = color_correction_reg_loss.item()
         loss += optim_args.lambda_color_correction * color_correction_reg_loss
+
+    if phase == 'low_densification' and pseudo_view_consistency_loss is not None:
+        depth_loss = edge_aware_smoothness(depth, gt_image)
+        range_loss = - (depth.max() - depth.min())
+        loss += 0.01 * (depth_loss + 0.001 * range_loss)
+        loss += pseudo_view_consistency_loss
+
     return scalar_dict, loss, acc
 
 
-def save_images(gaussians_renderer, viewpoint_cam, gaussians, depth, acc, gt_image, image, iteration):
+def save_images(viewpoint_cam, gaussians, depth, acc, gt_image, image, iteration):
     is_save_images = True
     if is_save_images and (iteration % 1000 == 0):
         # row0: gt_image, image, depth
@@ -256,7 +263,7 @@ def update_progress_bar(progress_bar, gaussians, iteration, image, gt_image, mas
     return ema_loss_for_log, ema_psnr_for_log
 
 
-def do_densification(gaussians, viewpoint_cam, iteration, radii, visibility_filter, viewspace_point_tensor, render_pkg, scalar_dict, tensor_dict, optim_args):
+def do_densification(phase, gaussians, viewpoint_cam, iteration, radii, visibility_filter, viewspace_point_tensor, render_pkg, scalar_dict, tensor_dict, optim_args):
     if iteration < optim_args.densify_until_iter:
         gaussians.set_max_radii2D(radii, visibility_filter)
         gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter, viewpoint_cam)
@@ -268,10 +275,11 @@ def do_densification(gaussians, viewpoint_cam, iteration, radii, visibility_filt
             gaussians.add_densification_stats_sky(viewspace_point_tensor_sky, visibility_filter_sky, viewpoint_cam)
 
         prune_big_points = iteration > optim_args.opacity_reset_interval and optim_args.prune_big_points
+        max_grad = 0.0005 if phase == 'low_densification' else optim_args.densify_grad_threshold
         if iteration > optim_args.densify_from_iter:
             if iteration % optim_args.densification_interval == 0:
                 scalars, tensors = gaussians.densify_and_prune(
-                    max_grad=optim_args.densify_grad_threshold,
+                    max_grad=max_grad,
                     min_opacity=optim_args.min_opacity,
                     prune_big_points=prune_big_points,
                 )
@@ -347,6 +355,26 @@ def load_checkpoint_if_exists(gaussians):
     return start_iter
 
 
+def calculate_pseudo_view_consistency_losses(gaussians_renderer, pseudo_viewpoint_stack, viewpoint_cam, cooperating_gaussians, optim_args):
+    pseudo_view_consistency_losses = {}
+    pseudo_viewpoint_cam = pseudo_viewpoint_stack.pop(randint(0, len(pseudo_viewpoint_stack) - 1))
+    pseudo_render_results = []
+    mask = torch.ones_like(viewpoint_cam.original_image[0:1]).bool()  # TODO
+    for i in range(len(cooperating_gaussians)):
+        render_pkg = gaussians_renderer.render(pseudo_viewpoint_cam, cooperating_gaussians[i])
+        pseudo_render_results.append(render_pkg["rgb"])
+    for i in range(len(cooperating_gaussians)):
+        for j in range(len(cooperating_gaussians)):
+            if i != j:
+                other = pseudo_render_results[j].clone().detach()
+                Ll1 = l1_loss(pseudo_render_results[i], other, mask)
+                ssim_value = ssim(pseudo_render_results[i], other, mask=mask)
+                lpips_value = lpips(pseudo_render_results[i] * mask, other * mask)
+                photometric_loss = (1.0 - optim_args.lambda_dssim) * optim_args.lambda_l1 * Ll1 + optim_args.lambda_dssim * (1.0 - ssim_value) + optim_args.lambda_lpips * lpips_value
+                pseudo_view_consistency_losses[i] = photometric_loss
+    return pseudo_view_consistency_losses
+
+
 def training():
     training_args = cfg.train
     optim_args = cfg.optim
@@ -355,9 +383,9 @@ def training():
 
     tb_writer = prepare_output_and_logger()
 
-    scene: Scene = create_scene()
-    gaussians: StreetGaussianModel = scene.gaussians
-    gaussians.training_setup()
+    scene, cooperating_gaussians = create_scene_with_cooperating_gaussians()
+    for gaussians in cooperating_gaussians:
+        gaussians.training_setup()
     gaussians_renderer = StreetGaussianRenderer()
 
     use_diffusion = diffusion_args.use_diffusion and len(diffusion_args.sample_iterations) > 0
@@ -367,9 +395,10 @@ def training():
     else:
         diffusion_runner = None
 
-    start_iter = load_checkpoint_if_exists(gaussians)
-    print(f'Starting from {start_iter}')
-    save_cfg(cfg, cfg.model_path, epoch=start_iter)
+    start_iter = 1
+    # start_iter = load_checkpoint_if_exists(gaussians)
+    # print(f'Starting from {start_iter}')
+    # save_cfg(cfg, cfg.model_path, epoch=start_iter)
 
     iter_start = torch.cuda.Event(enable_timing=True)
     iter_end = torch.cuda.Event(enable_timing=True)
@@ -380,6 +409,7 @@ def training():
 
     viewpoint_stack = []
     train_viewpoint_stack: List[Camera] = scene.getTrainCameras().copy()
+    pseudo_viewpoint_stack = scene.getPseudoCameras().copy()
     viewpoint_stack += train_viewpoint_stack
     training_camera_number = len(viewpoint_stack)
 
@@ -394,58 +424,77 @@ def training():
         profiler_step()
 
         iter_start.record()  # type: ignore
-        gaussians.update_learning_rate(iteration)
-
-        # Every 1000 its we increase the levels of SH up to a maximum degree
-        if iteration % 1000 == 0:
-            gaussians.oneupSHdegree()
-
-        restarting = iteration == start_iter and iteration - 1 in diffusion_args.sample_iterations
-        if use_diffusion and (iteration in diffusion_args.sample_iterations or restarting):
-            run_diffusion_progress_for_novel_views(iteration, restarting, scene, gaussians, diffusion_args, diffusion_runner, train_viewpoint_stack, viewpoint_stack)
+        if iteration < 100:
+            phase = 'warm_up'
+        else:
+            if iteration % 200 >= 100:
+                phase = 'low_densification'
+            else:
+                phase = 'high_densification'
 
         viewpoint_cam = sample_train_view(viewpoint_stack, training_camera_number)
-        gt_image = viewpoint_cam.original_image
-        mask = viewpoint_cam.guidance['mask'] if 'mask' in viewpoint_cam.guidance else torch.ones_like(gt_image[0:1]).bool()
-        sky_mask = viewpoint_cam.guidance['sky_mask'] if 'sky_mask' in viewpoint_cam.guidance else None
-        obj_bound = viewpoint_cam.guidance['obj_bound'] if 'obj_bound' in viewpoint_cam.guidance else None
-
-        render_pkg = gaussians_renderer.render(viewpoint_cam, gaussians)
-        image, acc, viewspace_point_tensor, visibility_filter, radii = render_pkg["rgb"], render_pkg['acc'], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-        depth = render_pkg['depth']  # [1, H, W]
-        if viewpoint_cam.meta['is_novel_view']:
-            scalar_dict, loss, image, mask, gt_image = get_novel_view_loss(viewpoint_cam, image, mask, optim_args)
+        pseudo_view_consistency_losses = {}
+        # 预先计算两个高斯场的 Pseudo-View Consistency loss，因为两者互相依赖
+        if phase == 'low_densification' and 500 <= iteration <= 10000:
+            pseudo_view_consistency_losses = calculate_pseudo_view_consistency_losses(gaussians_renderer, pseudo_viewpoint_stack, viewpoint_cam, cooperating_gaussians, optim_args)
         else:
-            scalar_dict, loss, acc = get_raw_view_loss(gaussians_renderer, gaussians, viewpoint_cam, acc, depth, image, gt_image, mask, sky_mask, obj_bound, iteration, optim_args)
+            pseudo_view_consistency_losses[0] = None
+            pseudo_view_consistency_losses[1] = None
 
-        scalar_dict['loss'] = loss.item()
-        loss.backward()
-        iter_end.record()  # type: ignore
+        for gaussian_idx, gaussians in enumerate(cooperating_gaussians):
+            gaussians.update_learning_rate(iteration)
 
-        with torch.no_grad():
-            save_images(gaussians_renderer, viewpoint_cam, gaussians, depth, acc, gt_image, image, iteration)
+            # Every 1000 its we increase the levels of SH up to a maximum degree
+            if iteration % 1000 == 0:
+                gaussians.oneupSHdegree()
 
-            tensor_dict = dict()
-            ema_loss_for_log, ema_psnr_for_log = update_progress_bar(progress_bar, gaussians, iteration, image, gt_image, mask, viewpoint_cam, loss, ema_loss_for_log, ema_psnr_for_log)
-            do_densification(gaussians, viewpoint_cam, iteration, radii, visibility_filter, viewspace_point_tensor, render_pkg, scalar_dict, tensor_dict, optim_args)
+            # TODO
+            # restarting = iteration == start_iter and iteration - 1 in diffusion_args.sample_iterations
+            # if use_diffusion and (iteration in diffusion_args.sample_iterations or restarting):
+            #     run_diffusion_progress_for_novel_views(iteration, restarting, scene, gaussians, diffusion_args, diffusion_runner, train_viewpoint_stack, viewpoint_stack)
 
-            # Reset opacity
-            if iteration < optim_args.densify_until_iter and iteration > optim_args.densify_from_iter:
-                if iteration % optim_args.opacity_reset_interval == 0:
-                    gaussians.reset_opacity()
-                if data_args.white_background and iteration == optim_args.densify_from_iter:
-                    gaussians.reset_opacity()
+            gt_image = viewpoint_cam.original_image
+            mask = viewpoint_cam.guidance['mask'] if 'mask' in viewpoint_cam.guidance else torch.ones_like(gt_image[0:1]).bool()
+            sky_mask = viewpoint_cam.guidance['sky_mask'] if 'sky_mask' in viewpoint_cam.guidance else None
+            obj_bound = viewpoint_cam.guidance['obj_bound'] if 'obj_bound' in viewpoint_cam.guidance else None
 
-            try:
-                training_report(tb_writer, iteration, scalar_dict, tensor_dict, training_args.test_iterations, scene, gaussians_renderer)
-            except Exception as e:
-                print(f'Failed to perform training report: {red(e)}')
+            render_pkg = gaussians_renderer.render(viewpoint_cam, gaussians)
+            image, acc, viewspace_point_tensor, visibility_filter, radii = render_pkg["rgb"], render_pkg['acc'], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
+            depth = render_pkg['depth']  # [1, H, W]
+            if viewpoint_cam.meta['is_novel_view']:
+                scalar_dict, loss, image, mask, gt_image = get_novel_view_loss(viewpoint_cam, image, mask, optim_args)
+            else:
+                scalar_dict, loss, acc = get_raw_view_loss(gaussians_renderer, phase, gaussians, viewpoint_cam, acc, depth, image, gt_image, mask, sky_mask, obj_bound, iteration, pseudo_view_consistency_losses[gaussian_idx], optim_args)
 
-            if iteration < training_args.iterations:
-                gaussians.update_optimizer()
+            scalar_dict['loss'] = loss.item()
+            loss.backward()
+            iter_end.record()  # type: ignore
 
-            if (iteration in training_args.checkpoint_iterations):
-                save_checkpoint(gaussians, iteration, training_args)
+            with torch.no_grad():
+                # save_images(viewpoint_cam, gaussians, depth, acc, gt_image, image, iteration)
+
+                tensor_dict = dict()
+                if gaussian_idx == 0:
+                    ema_loss_for_log, ema_psnr_for_log = update_progress_bar(progress_bar, gaussians, iteration, image, gt_image, mask, viewpoint_cam, loss, ema_loss_for_log, ema_psnr_for_log)
+                do_densification(phase ,gaussians, viewpoint_cam, iteration, radii, visibility_filter, viewspace_point_tensor, render_pkg, scalar_dict, tensor_dict, optim_args)
+
+                # Reset opacity
+                if iteration < optim_args.densify_until_iter and iteration > optim_args.densify_from_iter:
+                    if iteration % optim_args.opacity_reset_interval == 0:
+                        gaussians.reset_opacity()
+                    if data_args.white_background and iteration == optim_args.densify_from_iter:
+                        gaussians.reset_opacity()
+
+                try:
+                    training_report(tb_writer, iteration, scalar_dict, tensor_dict, training_args.test_iterations, scene, gaussians_renderer)
+                except Exception as e:
+                    print(f'Failed to perform training report: {red(e)}')
+
+                if iteration < training_args.iterations:
+                    gaussians.update_optimizer()
+
+                if (iteration in training_args.checkpoint_iterations):
+                    save_checkpoint(gaussians, iteration, training_args)
 
 
 def prepare_output_and_logger():

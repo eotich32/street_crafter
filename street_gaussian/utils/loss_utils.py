@@ -129,3 +129,20 @@ def _ssim(img1, img2, window, window_size, channel, size_average=True):
         return ssim_map.mean()
     else:
         return ssim_map.mean(1).mean(1).mean(1)
+
+
+def edge_aware_smoothness(depth, image):
+    dx = depth[:, :, 1:] - depth[:, :, :-1]
+    dy = depth[:, 1:, :] - depth[:, :-1, :]
+
+    image_dx = image[:, :, 1:] - image[:, :, :-1]
+    image_dy = image[:, 1:, :] - image[:, :-1, :]
+
+    weight_x = torch.exp(-torch.mean(torch.abs(image_dx), dim=0, keepdim=True))
+    weight_y = torch.exp(-torch.mean(torch.abs(image_dy), dim=0, keepdim=True))
+
+    smoothness_x = weight_x * torch.abs(dx)
+    smoothness_y = weight_y * torch.abs(dy)
+
+    return smoothness_x.mean() + smoothness_y.mean()
+

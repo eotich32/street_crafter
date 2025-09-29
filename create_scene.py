@@ -68,3 +68,40 @@ def create_scene_for_diffusion_inference(scene_meta, device='cuda'):
     # print(f'=================== len(scene_info.train_cameras): {len(scene_info.train_cameras)}')
     train_cameras = cameraList_from_camInfos(scene_info.train_cameras, 1)
     return scene, train_cameras
+
+
+def create_scene_with_cooperating_gaussians(device='cuda'):
+    dataset = Dataset()
+    cooperating_gaussians = []
+    for i in range(2):
+        gaussians = StreetGaussianModel(dataset.metadata)
+        cooperating_gaussians.append(gaussians)
+    if (cfg.mode == 'train' and cfg.diffusion.use_diffusion) or cfg.mode in ['diffusion','parallel_diffusion']:
+        if cfg.diffusion.use_img_diffusion:
+            print("Image Diffusion Model is used")
+            video_diffusion = None
+        else:
+            print("Lodaing Video Diffusion Model...")
+            video_diffusion = VideoDiffusionModel(
+                config_path=cfg.diffusion.config_path,
+                ckpt_path=cfg.diffusion.ckpt_path,
+                height=cfg.diffusion.height,
+                width=cfg.diffusion.width
+            )
+    else:
+        video_diffusion = None
+
+    if cfg.mode == 'train' or cfg.mode in ['diffusion','parallel_diffusion']:
+        pointcloud_processor = getPointCloudProcessor()
+    else:
+        pointcloud_processor = None
+    cooperating_gaussians[1].create_from_pcd(pcd=None, spatial_lr_scale=dataset.getmeta('scene_radius'))
+
+    scene = Scene(
+        gaussians=cooperating_gaussians[0],
+        dataset=dataset,
+        pointcloud_processor=pointcloud_processor,
+        diffusion=video_diffusion,
+        device=device
+    )
+    return scene, cooperating_gaussians

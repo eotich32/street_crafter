@@ -69,3 +69,6 @@ class Scene:
 
     def getNovelViewCameras(self, scale=1):
         return self.dataset.novel_view_cameras[scale]
+
+    def getPseudoCameras(self, scale=1.0):
+        return self.dataset.pseudo_cameras[scale]
