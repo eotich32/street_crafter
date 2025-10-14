@@ -123,7 +123,7 @@ def sample_train_view(viewpoint_stack, training_camera_number):
         return viewpoint_stack[randint(0, training_camera_number - 1)]
 
 
-def get_novel_view_loss(viewpoint_cam, image, mask, optim_args):
+def get_novel_view_loss(diffusion_runner, viewpoint_cam, image, mask, optim_args):
     assert viewpoint_cam.meta['diffusion_original_image'] is not None, 'Diffusion original image is not found'
     scalar_dict = dict()
     image = diffusion_runner.preprocess_tensor(image)  # type: ignore
@@ -414,7 +414,7 @@ def training():
         image, acc, viewspace_point_tensor, visibility_filter, radii = render_pkg["rgb"], render_pkg['acc'], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         depth = render_pkg['depth']  # [1, H, W]
         if viewpoint_cam.meta['is_novel_view']:
-            scalar_dict, loss, image, mask, gt_image = get_novel_view_loss(viewpoint_cam, image, mask, optim_args)
+            scalar_dict, loss, image, mask, gt_image = get_novel_view_loss(diffusion_runner, viewpoint_cam, image, mask, optim_args)
         else:
             scalar_dict, loss, acc = get_raw_view_loss(gaussians_renderer, gaussians, viewpoint_cam, acc, depth, image, gt_image, mask, sky_mask, obj_bound, iteration, optim_args)
 
