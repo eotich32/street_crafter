@@ -212,7 +212,7 @@ def get_raw_view_loss(gaussians_renderer, gaussians, viewpoint_cam, acc, depth, 
     return scalar_dict, loss, acc
 
 
-def save_images(gaussians_renderer, viewpoint_cam, gaussians, depth, acc, gt_image, image, iteration):
+def save_images(diffusion_runner, gaussians_renderer, viewpoint_cam, gaussians, depth, acc, gt_image, image, iteration):
     is_save_images = True
     if is_save_images and (iteration % 1000 == 0):
         # row0: gt_image, image, depth
@@ -423,7 +423,7 @@ def training():
         iter_end.record()  # type: ignore
 
         with torch.no_grad():
-            save_images(gaussians_renderer, viewpoint_cam, gaussians, depth, acc, gt_image, image, iteration)
+            save_images(diffusion_runner, gaussians_renderer, viewpoint_cam, gaussians, depth, acc, gt_image, image, iteration)
 
             tensor_dict = dict()
             ema_loss_for_log, ema_psnr_for_log = update_progress_bar(progress_bar, gaussians, iteration, image, gt_image, mask, viewpoint_cam, loss, ema_loss_for_log, ema_psnr_for_log)
