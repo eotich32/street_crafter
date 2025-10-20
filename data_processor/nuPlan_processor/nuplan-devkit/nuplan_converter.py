@@ -26,6 +26,11 @@ from nuplan.database.nuplan_db_orm.nuplandb import NuPlanDB
 def makedirs(p):
     os.makedirs(p, exist_ok=True)
 
+opencv2camera = np.array([[0., 0., 1., 0.],
+                          [-1., 0., 0., 0.],
+                          [0., -1., 0., 0.],
+                          [0., 0., 0., 1.]])
+
 # 不再四舍五入，保持原始微秒
 def identity_ts(ts_us):
     return int(ts_us)
@@ -282,6 +287,8 @@ def export_track_trajectory_gpu(db, ts_slice, cam_id_map, ego_cache, save_dir,
         dim = np.array([sub.height.max(), sub.width.max(), sub.length.max()], dtype=np.float32)
         label = cat_df.set_index('token').loc[sub.category_token.iloc[0], 'name']
         stationary = bool(box_df[box_df.track_token == t_token].stationary.all())
+        if len(frames) < 2:
+            continue
         trajectory[t_token] = dict(
             label=label,
             height=dim[0], width=dim[1], length=dim[2],
@@ -420,9 +427,9 @@ def main(nuplan_root, log_name, save_dir, skip_existing=False, cam_ids=None):
         T[:3, :3] = rot
         T[:3, 3] = t
         ego_cache[ego.token] = (raw_ts, T)
-
     sensor_root = os.path.join(nuplan_root, 'nuplan-v1.1', 'sensor_blobs')
     print("[INFO] 导出 images（去畸变 + 重命名）...")
+    
     for new_idx, img_obj, ts, cam_id, filename_jpg in tqdm(ts_slice, desc='copy'):
         if cam_id not in valid_cam_ids:      # ← 只处理指定相机
             continue
@@ -432,11 +439,11 @@ def main(nuplan_root, log_name, save_dir, skip_existing=False, cam_ids=None):
             np.savetxt(ego_file, ego_T, fmt='%.8f')
 
         cam = db.camera.get(img_obj.camera_token)
-        cam_pose = ego_T @ cam.trans_matrix
+        cam_pose = ego_T #@ cam.trans_matrix
         cam_file = os.path.join(ego_dir, f"{new_idx:06d}_{cam_id}.txt")
         if not (skip_existing and os.path.exists(cam_file)):
             np.savetxt(cam_file, cam_pose, fmt='%.8f')
-
+        
         out_name = f"{new_idx:06d}_{cam_id}.png"
         out_path = os.path.join(img_dir, out_name)
         if skip_existing and os.path.exists(out_path):
@@ -451,7 +458,8 @@ def main(nuplan_root, log_name, save_dir, skip_existing=False, cam_ids=None):
         cam_newK_dict[cam_id] = new_K
         cv2.imwrite(out_path, dst)
     print("[DONE] 图像转换完成")
-
+    
+    
     print("[INFO] 导出相机标定 ...")
     for cam in db.camera:
         cam_id = cam_id_map.get(cam.channel)
@@ -466,6 +474,7 @@ def main(nuplan_root, log_name, save_dir, skip_existing=False, cam_ids=None):
         ]).reshape(9, 1)
         np.savetxt(os.path.join(intr_dir, f"{cam_id}.txt"), waymo_vec, fmt='%.8f')
         E = cam.trans_matrix
+        #E = np.matmul(E, opencv2camera)
         np.savetxt(os.path.join(ext_dir, f"{cam_id}.txt"), E, fmt='%.8f')
     print("[INFO] 相机标定导出完成")
 
