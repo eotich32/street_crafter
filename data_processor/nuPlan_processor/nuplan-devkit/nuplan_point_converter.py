@@ -118,35 +118,41 @@ def inbbox_points(points, R, center, dim):
            (np.abs(pts_local[:, 1]) <= hw) & \
            (np.abs(pts_local[:, 2]) <= hh)
 
-def generate_depth_from_lidar(points_ego, K, RT, H, W):
-    """将 ego 系点云投影到图像平面，生成稀疏深度图（与 Waymo 格式一致）"""
-    xyz_cam = points_ego @ RT[:3, :3].T + RT[:3, 3]
-    valid_depth = xyz_cam[:, 2] > 0
-    xyz_pixel = xyz_cam @ K.T
-    z = xyz_pixel[:, 2]
-    uv = xyz_pixel[:, :2] / (z[:, None] + 1e-6)
+def generate_depth_from_lidar(points_ego, K, D, E, H, W):
+    """
+    使用与 nuplan_converter.py 中一致的投影方式：
+    - E 是 camera → ego 的 4x4 外参
+    - K 是去畸变后的内参
+    - D 是畸变系数（通常为0，因为已经undistort）
+    """
+    ego2cam = np.linalg.inv(E)
+    pts_cam = (ego2cam[:3, :3] @ points_ego.T + ego2cam[:3, 3:4]).T  # (N, 3)
+
+    # 投影到图像
+    uv, _ = cv2.projectPoints(
+        pts_cam,  # (N, 3)
+        np.zeros((3, 1)),  # rvec
+        np.zeros((3, 1)),  # tvec
+        K, D
+    )
+    uv = uv.squeeze()  # (N, 2)
+
+    # 过滤
     u, v = uv[:, 0], uv[:, 1]
+    z = pts_cam[:, 2]
+    valid = (z > 0) & (u >= 0) & (u < W) & (v >= 0) & (v < H)
 
-    valid_u = np.logical_and(u >= 0, u < W)
-    valid_v = np.logical_and(v >= 0, v < H)
-    valid_pixel = np.logical_and.reduce([valid_depth, valid_u, valid_v])
+    u_int = np.clip(u[valid].astype(int), 0, W - 1)
+    v_int = np.clip(v[valid].astype(int), 0, H - 1)
+    z_valid = z[valid]
 
-    u_valid = u[valid_pixel]
-    v_valid = v[valid_pixel]
-    z_valid = z[valid_pixel]
-
-    # 转成整数像素坐标
-    u_int = np.clip(u_valid.astype(np.int32), 0, W - 1)
-    v_int = np.clip(v_valid.astype(np.int32), 0, H - 1)
-
-    # 用字典去重：同一像素只保留最近深度
+    # 去重：同一像素保留最近深度
     depth_dict = {}
     for ui, vi, zi in zip(u_int, v_int, z_valid):
         key = (vi, ui)
         if key not in depth_dict or zi < depth_dict[key]:
             depth_dict[key] = zi
 
-    # 构造深度图
     depth = np.full((H, W), np.finfo(np.float32).max, dtype=np.float32)
     for (vi, ui), zi in depth_dict.items():
         depth[vi, ui] = zi
@@ -156,7 +162,7 @@ def generate_depth_from_lidar(points_ego, K, RT, H, W):
     valid_values = depth[valid_mask]
 
     return valid_mask, valid_values
-
+    
 def visualize_depth_numpy(depth, minmax=None, cmap=cv2.COLORMAP_JET):
     """
     depth: (H, W)  float32
@@ -173,12 +179,24 @@ def visualize_depth_numpy(depth, minmax=None, cmap=cv2.COLORMAP_JET):
     x_ = cv2.applyColorMap(x, cmap)
     return x_, [mi, ma]
 
+def undistort_camera_matrix(K, D, img_size=(1920, 1080)):
+    """只算 new_K，不处理图像"""
+    new_K, _ = cv2.getOptimalNewCameraMatrix(K, D, img_size, alpha=0, newImgSize=img_size)
+    return new_K
+
 # ---------------- 主函数 ----------------
 def export_lidar_pcd(nuplan_root, log_name, save_dir, skip_existing=False):
 
     db_path = os.path.join(nuplan_root, 'nuplan-v1.1', 'splits', 'mini')
 
     db = NuPlanDB(data_root=db_path, load_path=log_name)
+
+    cam_newK_dict = {}
+    for cam in db.camera:
+        K = cam.intrinsic_np
+        D = cam.distortion_np
+        new_K = undistort_camera_matrix(K, D, img_size=(1920, 1080))
+        cam_newK_dict[cam.channel] = new_K
 
     # ---------- 1. 读取 CAM_F0 时间戳 ----------
     ts_json_path = os.path.join(save_dir, 'timestamps.json')
@@ -296,13 +314,17 @@ def export_lidar_pcd(nuplan_root, log_name, save_dir, skip_existing=False):
                 continue
             cam_id = cam_name2id[cam_name]
 
-            K = cam.intrinsic_np
-            RT = cam.trans_matrix.T        # ego → cam
-            RT[1, :] *= -1
-            #RT = RT @ np.linalg.inv(ego_T)  # world → cam
             H, W = 1080, 1920
-
-            depth_mask, depth_value = generate_depth_from_lidar(points_ego, K, RT, H, W)
+            new_K = cam_newK_dict[cam.channel]
+            #depth_mask, depth_value = generate_depth_from_lidar(points_ego, K, RT, H, W)
+            depth_mask, depth_value = generate_depth_from_lidar(
+                points_ego,
+                K=new_K,          # 去畸变后的内参
+                D=np.zeros(5),    # 已经 undistort，畸变为0
+                E=cam.trans_matrix,  # camera → ego
+                H=1080,
+                W=1920
+            )
             np.savez_compressed(os.path.join(depth_dir, f"{cam_idx:06d}_{cam_id}.npz"),
                                 mask=depth_mask,
                                 value=depth_value)
