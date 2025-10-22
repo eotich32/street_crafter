@@ -123,13 +123,18 @@ def sample_train_view(viewpoint_stack, training_camera_number):
         return viewpoint_stack[randint(0, training_camera_number - 1)]
 
 
-def get_novel_view_loss(diffusion_runner, viewpoint_cam, image, mask, optim_args):
+def get_novel_view_loss(diffusion_runner, viewpoint_cam, image, mask, optim_args, raw_view_diffusion):
     assert viewpoint_cam.meta['diffusion_original_image'] is not None, 'Diffusion original image is not found'
     scalar_dict = dict()
     image = diffusion_runner.preprocess_tensor(image)  # type: ignore
     mask = diffusion_runner.preprocess_tensor(mask)  # type: ignore
 
-    upper = int(mask.shape[-2] * 0.4)
+    # 由原视角偏移生成的新视角，因为上半部分没有雷达参考，所以不参与loss计算
+    # 原视角本身作为新视角（见train函数中的说明），不用雷达参考，整个图都参与loss计算
+    if raw_view_diffusion:
+        upper = 0
+    else:
+        upper = int(mask.shape[-2] * 0.4)
     mask[..., :upper, :] = 0  # do not compute loss on the upper half of the image?
     gt_image = viewpoint_cam.meta['diffusion_original_image']
     image_loss = image[:, upper:, :]
@@ -279,7 +284,7 @@ def do_densification(gaussians, viewpoint_cam, iteration, radii, visibility_filt
                 tensor_dict.update(tensors)  # type: ignore
 
 
-def run_diffusion_progress_for_novel_views(iteration, restarting, scene, gaussians, diffusion_args, diffusion_runner, train_viewpoint_stack, viewpoint_stack):
+def run_diffusion_progress_for_novel_views(training_args, iteration, restarting, scene, gaussians, diffusion_args, diffusion_runner, train_viewpoint_stack, viewpoint_stack):
     with torch.no_grad():
         print(f"Sampling diffusion at iteration {iteration - restarting}")
         min_scale = min(diffusion_args.sample_scales)
@@ -287,7 +292,10 @@ def run_diffusion_progress_for_novel_views(iteration, restarting, scene, gaussia
         min_iteration = min(diffusion_args.sample_iterations)
         max_iteration = max(diffusion_args.sample_iterations)
         scale = (min_scale - max_scale) * (iteration - restarting - min_iteration) / (max_iteration - min_iteration) + max_scale
-        novel_viewpoint_stack = scene.getNovelViewCameras().copy()
+        if training_args.get('raw_view_diffusion', False):
+            novel_viewpoint_stack = train_viewpoint_stack + scene.getNovelViewCameras().copy()
+        else:
+            novel_viewpoint_stack = scene.getNovelViewCameras().copy()
 
         if cfg.diffusion_parallel == 0:
             # 在主进程中同时进行3DGS和diffusion推理
@@ -311,7 +319,7 @@ def run_diffusion_progress_for_novel_views(iteration, restarting, scene, gaussia
         viewpoint_stack.clear()  # remove the previous sampling results
         viewpoint_stack.extend(train_viewpoint_stack)
         for viewpoint in novel_viewpoint_stack:
-            if not viewpoint.meta['skip_camera']:
+            if 'skip_camera' not in viewpoint.meta or not viewpoint.meta['skip_camera']:
                 viewpoint.set_device('cuda')
                 viewpoint_stack.append(viewpoint)
 
@@ -337,14 +345,15 @@ def load_checkpoint_if_exists(gaussians):
         else:
             loaded_iter = cfg.loaded_iter
         ckpt_path = os.path.join(cfg.trained_model_dir, f'iteration_{loaded_iter}.pth')
-        state_dict = torch.load(ckpt_path)
+        state_dict = torch.load(ckpt_path, weights_only=False)
         start_iter = state_dict['iter']
         print(f'Loading model from {ckpt_path}')
         gaussians.load_state_dict(state_dict)
+        return start_iter, True
     else:
         start_iter = 1
         print('No checkpoint found. Training from scratch')
-    return start_iter
+        return start_iter, False
 
 
 def training():
@@ -367,7 +376,7 @@ def training():
     else:
         diffusion_runner = None
 
-    start_iter = load_checkpoint_if_exists(gaussians)
+    start_iter, load_checkpoint = load_checkpoint_if_exists(gaussians)
     print(f'Starting from {start_iter}')
     save_cfg(cfg, cfg.model_path, epoch=start_iter)
 
@@ -389,7 +398,11 @@ def training():
         for viewpoint in scene.getNovelViewCameras():
             viewpoint.set_device('cuda')
 
-    # Perform the actual training procedure
+    # 新视角有两种：
+    # 1：在配置中生成的偏移视角，此时需要用diffusion
+    # 2：原始视角作为新视角，也需要diffusion。这是为了解决位姿不精确问题，把原始位姿当成是新视角。通过cfg.train.raw_view_diffusion来配置（True,False）
+    #       这种情况，训练时sample_iterations的第一个iter之前，还是用原始位姿训练。
+    #       第一个iter开始，原始不精确位姿也参与diffusion
     for iteration in range(start_iter, training_args.iterations + 1):
         profiler_step()
 
@@ -400,9 +413,11 @@ def training():
         if iteration % 1000 == 0:
             gaussians.oneupSHdegree()
 
+        raw_view_diffusion = training_args.get('raw_view_diffusion', False)
         restarting = iteration == start_iter and iteration - 1 in diffusion_args.sample_iterations
-        if use_diffusion and (iteration in diffusion_args.sample_iterations or restarting):
-            run_diffusion_progress_for_novel_views(iteration, restarting, scene, gaussians, diffusion_args, diffusion_runner, train_viewpoint_stack, viewpoint_stack)
+        need_rediffusion = raw_view_diffusion and load_checkpoint and 'diffusion_original_image' not in train_viewpoint_stack[0].meta
+        if use_diffusion and (iteration in diffusion_args.sample_iterations or restarting or need_rediffusion):
+            run_diffusion_progress_for_novel_views(training_args, iteration, start_iter, scene, gaussians, diffusion_args, diffusion_runner, train_viewpoint_stack, viewpoint_stack)
 
         viewpoint_cam = sample_train_view(viewpoint_stack, training_camera_number)
         gt_image = viewpoint_cam.original_image
@@ -413,8 +428,12 @@ def training():
         render_pkg = gaussians_renderer.render(viewpoint_cam, gaussians)
         image, acc, viewspace_point_tensor, visibility_filter, radii = render_pkg["rgb"], render_pkg['acc'], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         depth = render_pkg['depth']  # [1, H, W]
-        if viewpoint_cam.meta['is_novel_view']:
-            scalar_dict, loss, image, mask, gt_image = get_novel_view_loss(diffusion_runner, viewpoint_cam, image, mask, optim_args)
+        if raw_view_diffusion:
+            is_novel_view = (not viewpoint_cam.meta['is_novel_view'] and iteration >= min(diffusion_args.sample_iterations)) or viewpoint_cam.meta['is_novel_view']
+        else:
+            is_novel_view = viewpoint_cam.meta['is_novel_view']
+        if is_novel_view:
+            scalar_dict, loss, image, mask, gt_image = get_novel_view_loss(diffusion_runner, viewpoint_cam, image, mask, optim_args, raw_view_diffusion)
         else:
             scalar_dict, loss, acc = get_raw_view_loss(gaussians_renderer, gaussians, viewpoint_cam, acc, depth, image, gt_image, mask, sky_mask, obj_bound, iteration, optim_args)
 
@@ -423,7 +442,7 @@ def training():
         iter_end.record()  # type: ignore
 
         with torch.no_grad():
-            save_images(gaussians_renderer, viewpoint_cam, gaussians, depth, acc, gt_image, image, iteration)
+            # save_images(gaussians_renderer, viewpoint_cam, gaussians, depth, acc, gt_image, image, iteration)
 
             tensor_dict = dict()
             ema_loss_for_log, ema_psnr_for_log = update_progress_bar(progress_bar, gaussians, iteration, image, gt_image, mask, viewpoint_cam, loss, ema_loss_for_log, ema_psnr_for_log)

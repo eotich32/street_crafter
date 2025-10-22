@@ -214,7 +214,7 @@ def waymo_novel_view_cameras(cameras: List[CameraInfo], ego_frame_poses, obj_inf
     for shift in shifts:
         modes.append({'shift': shift, 'rotations': [{'axis':'z', 'rotate': 0.0}]})
     # 自定义新视角模式：translation为平称，x前向为正，y向左为正，z向上为正；rotations为绕各轴依次旋转，单位为角度
-    modes.append({'custom':True, 'translation': {'x':0,'y':3,'z':0}, 'rotations': [{'axis': 'y','rotate': 0}]})
+    # modes.append({'custom':True, 'translation': {'x':0,'y':3,'z':0}, 'rotations': [{'axis': 'y','rotate': 0}]})
 
     novel_view_cameras = []
     skip_count = 0
