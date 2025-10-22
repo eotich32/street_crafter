@@ -372,7 +372,7 @@ def export_track_trajectory_gpu(db, ts_slice, cam_id_map, ego_cache, save_dir,
                         hull = cv2.convexHull(uv[valid])
                         cv2.fillPoly(mask_canvas, [hull], 255)
                 writers[cam_id].write(canvas)
-                mask_path = os.path.join(dynamic_mask_dir, f'{new_idx:06d}_{cam_id}.jpg')
+                mask_path = os.path.join(dynamic_mask_dir, f'{new_idx:06d}_{cam_id}.png')
                 cv2.imwrite(mask_path, mask_canvas)
                 mask_cache[cam_id][:] = 0
         for w in writers.values():
@@ -435,7 +435,8 @@ def main(nuplan_root, log_name, save_dir, skip_existing=False, cam_ids=None):
             continue
         ego_ts, ego_T = ego_cache.get(img_obj.ego_pose_token, (0., np.eye(4)))
         ego_file = os.path.join(ego_dir, f"{new_idx:06d}.txt")
-        if not (skip_existing and os.path.exists(ego_file)):
+        #if not (skip_existing and os.path.exists(ego_file)):
+        if cam_id==0:
             np.savetxt(ego_file, ego_T, fmt='%.8f')
 
         cam = db.camera.get(img_obj.camera_token)
@@ -444,7 +445,7 @@ def main(nuplan_root, log_name, save_dir, skip_existing=False, cam_ids=None):
         if not (skip_existing and os.path.exists(cam_file)):
             np.savetxt(cam_file, cam_pose, fmt='%.8f')
         
-        out_name = f"{new_idx:06d}_{cam_id}.jpg"
+        out_name = f"{new_idx:06d}_{cam_id}.png"
         out_path = os.path.join(img_dir, out_name)
         if skip_existing and os.path.exists(out_path):
             continue
