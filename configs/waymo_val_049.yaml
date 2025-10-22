@@ -5,4 +5,6 @@ exp_name: waymo_val_049
 data:
     selected_frames: [93, 193]
 
+diffusion:
+    use_img_diffusion: False
 

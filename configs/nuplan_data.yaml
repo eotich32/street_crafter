@@ -1,0 +1,85 @@
+task: nuplan
+source_path: /mnt/data/dataset/nuPlan/processed/2021.05.12.22.00.38_veh-35_01008_01518_100
+exp_name: 2021.05.12.22.00.38_veh-35_01008_01518
+resume: True
+
+data:
+    split_train: -1
+    split_test: 1000
+    #split_test: 1000
+    type: Waymo
+    white_background: True
+    selected_frames: [0, 99]
+    cameras: [0,1,2,3,4,5,6,7]
+    extent: 20.
+    use_colmap: True
+
+model:
+    gaussian:
+        sh_degree: 1
+        fourier_dim: 1
+        fourier_scale: 1.
+        flip_prob: 0.2
+    nsg:
+        include_bkgd: True
+        include_obj: True
+        include_sky: False
+        include_cube_map: True
+        opt_track: True
+        #opt_track: False
+
+train:
+    iterations: 30000
+    test_iterations: [15000, 30000,50000]
+    checkpoint_iterations: [3000,7000,15000, 30000,40000,50000]
+
+optim:
+    prune_box_interval: 100
+    densification_interval: 100
+    densify_from_iter: 500
+    densify_grad_threshold_bkgd: 0.01
+    densify_grad_abs_bkgd: True
+    densify_grad_threshold_obj: 0.01
+    densify_grad_abs_obj: True
+    feature_lr: 0.0025
+    min_opacity: 0.005
+    opacity_lr: 0.05
+    opacity_reset_interval: 3000
+    percent_big_ws: 0.1
+    percent_dense: 0.01
+    position_lr_delay_mult: 0.01
+    position_lr_final: 1.6e-06
+    position_lr_init: 0.00016
+    position_lr_init_obj: 1.6e-05
+    position_lr_max_steps: 30000
+    rotation_lr: 0.001
+    scaling_lr: 0.005
+    semantic_lr: 0.01
+
+    lambda_dssim: 0.2
+    lambda_mask: 0.1
+    lambda_reg: 0.1
+    lambda_sky: 0.05
+    lambda_depth_lidar: 0.01
+    lambda_lpips: 0.5
+    lambda_novel: 0.1
+
+    track_position_lr_delay_mult: 0.2
+    track_position_lr_init: 0.0005
+    track_position_lr_final: 0.0001
+    track_position_max_steps: 30000
+
+    track_rotation_lr_delay_mult: 0.5
+    track_rotation_lr_init: 0.00001
+    track_rotation_lr_final: 0.000005
+    track_rotation_max_steps: 30000
+
+diffusion:
+    use_diffusion: False
+    config_path: /src/51sim-ai/street_crafter/video_diffusion/configs/inference/waymo_high_res.yaml
+    ckpt_path: /src/51sim-ai/street_crafter/video_diffusion/ckpts/vista_condition_high_res_mix_v2.safetensors
+    height: 576
+    width: 1024
+    sample_iterations: [7000, 12000, 17000, 22000]
+    #sample_scales: [0.7, 0.3]
+    sample_scales: [0.7, 0.5]
