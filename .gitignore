@@ -21,3 +21,9 @@ video_diffusion/annos/
 video_diffusion/src/
 video_diffusion/logs/
 !video_diffusion/vwm/data/
+
+configs/*
+submodules_pip/*
+submodules/diff_rasterization/*
+submodules/diff-point-rasterization/*
+submodules/diff-point-rasterization/
