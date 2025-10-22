@@ -150,7 +150,7 @@ cfg.data.delta_frames = 10
 # data.regenerate_pcd: Regenerate the initialization point cloud.
 
 cfg.render = CN()
-cfg.render.antialiasing = True
+cfg.render.antialiasing = False 
 cfg.render.convert_SHs_python = False
 cfg.render.compute_cov3D_python = False
 cfg.render.debug = False
