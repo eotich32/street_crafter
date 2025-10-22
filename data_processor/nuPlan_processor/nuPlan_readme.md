@@ -58,7 +58,7 @@ python  data_processor/nuPlan_processor/generate_sky_mask_with_8cams.py
 
 **训练过程**
 
-将train函数中的输出log参数加上点云大小progress_bar.set_description(f"Exp: {cfg.task}-{cfg.exp_name}, Loss: {ema_loss_for_log:.{7}f}, PSNR: {ema_psnr_for_log:.{4}f}, point_num: {gaussians.get_xyz.size(0)}")。经过测试，点云point_num在60000000个的时候就无法再继续进行训练了。
+将train函数中的输出log参数加上点云大小progress_bar.set_description(f"Exp: {cfg.task}-{cfg.exp_name}, Loss: {ema_loss_for_log:.{7}f}, PSNR: {ema_psnr_for_log:.{4}f}, point_num: {gaussians.get_xyz.size(0)}")。经过测试，点云point_num在40000000个的时候就无法再继续进行训练了。
 
 需要修改config中的参数，主要有densify_grad_threshold_bkgd和densify_grad_abs_obj，这个是在密度化的角度来实现，还有从剪枝的阈值进行的是min_opacity，第一个已经经过测试是有效的，第二个还需进行测试。
 
