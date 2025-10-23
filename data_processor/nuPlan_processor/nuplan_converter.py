@@ -90,12 +90,12 @@ def _build_cam_id_map(db):
     return {cam.channel: idx for idx, cam in enumerate(cameras)}
 
 # ---------- 每相机 200 帧（原始时间戳） ----------
-def _build_per_camera_frames(db, frames_per_cam=200, start_idx=0):
+def _build_per_camera_frames(db, start_frame=0, num_frames=200):
     Image = db.image[0].__class__
     query = (db.session.query(Image)
                        .order_by(Image.timestamp)
-                       .offset(start_idx)
-                       .limit(8 * frames_per_cam * 2))
+                       .offset(start_frame)
+                       .limit(8 * num_frames * 2))
     all_rows = query.all()
     cam_chunks = defaultdict(list)
     for img in all_rows:
@@ -103,7 +103,7 @@ def _build_per_camera_frames(db, frames_per_cam=200, start_idx=0):
         if len(parts) < 3:
             continue
         cam_name = parts[1]
-        if len(cam_chunks[cam_name]) < frames_per_cam:
+        if len(cam_chunks[cam_name]) < num_frames:
             cam_chunks[cam_name].append((img.timestamp, img))   # 原始 ts
     result = []
     cam_id_map = {name: idx for idx, name in enumerate(cam_chunks.keys())}
@@ -385,7 +385,7 @@ def export_track_trajectory_gpu(db, ts_slice, cam_id_map, ego_cache, save_dir,
         print('[INFO] dynamic_mask 已保存 ->', dynamic_mask_dir)
 
 # ---------- 主流程 ----------
-def main(nuplan_root, log_name, save_dir, skip_existing=False,frame_nums=None, cam_ids=None):
+def main(nuplan_root, log_name, save_dir,start_frame,num_frames, skip_existing=False, cam_ids=None):
     makedirs(save_dir)
     cam_newK_dict = {}
     ego_dir = os.path.join(save_dir, 'ego_pose'); makedirs(ego_dir)
@@ -401,7 +401,7 @@ def main(nuplan_root, log_name, save_dir, skip_existing=False,frame_nums=None, c
     db = NuPlanDB(data_root=db_path, load_path=log_name)
 
 
-    ts_slice, cam_id_map = _build_per_camera_frames(db, frames_per_cam=frame_nums, start_idx=0)
+    ts_slice, cam_id_map = _build_per_camera_frames(db, start_frame=start_frame,num_frames=num_frames)
     print("[INFO] 相机通道映射:", cam_id_map)
 
     # 放在解析完 db 之后，拿到 cam_id_map 即可
@@ -495,10 +495,11 @@ if __name__ == '__main__':
     parser.add_argument('--log_name', required=True, help='log name token')
     parser.add_argument('--save_dir', required=True)
     parser.add_argument('--skip_existing', action='store_true')
-    parser.add_argument('--frame_num', type=int,default=100, help='每相机帧数')
+    parser.add_argument('--start_frame', type=int,default=0, help='从哪一帧开始提取')
+    parser.add_argument('--num_frames', type=int,default=200, help='提取的帧数')
     parser.add_argument('--cam_ids', type=int, nargs='+', default=None,
                         help='仅导出指定相机编号（如 0 1 3），不指定则导出全部')
 
     args = parser.parse_args()
-    main(args.nuplan_root, args.log_name, args.save_dir,
-         skip_existing=args.skip_existing, frame_nums=args.frame_num,cam_ids=args.cam_ids)
+    main(args.nuplan_root, args.log_name, args.save_dir,start_frame=args.start_frame,num_frames=args.num_frames,
+         skip_existing=args.skip_existing,cam_ids=args.cam_ids)
