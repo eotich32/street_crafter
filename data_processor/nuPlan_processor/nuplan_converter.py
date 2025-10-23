@@ -94,8 +94,8 @@ def _build_per_camera_frames(db, start_frame=0, num_frames=200):
     Image = db.image[0].__class__
     query = (db.session.query(Image)
                        .order_by(Image.timestamp)
-                       .offset(start_frame)
-                       .limit(8 * num_frames * 2))
+                       .offset(8 * start_frame )
+                       .limit(8 * num_frames ))
     all_rows = query.all()
     cam_chunks = defaultdict(list)
     for img in all_rows:
