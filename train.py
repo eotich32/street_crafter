@@ -414,47 +414,85 @@ def training():
         for viewpoint in scene.getNovelViewCameras():
             viewpoint.set_device('cuda')
 
+<<<<<<< Updated upstream
     # 新视角有两种：
     # 1：在配置中生成的偏移视角，此时需要用diffusion
     # 2：原始视角作为新视角，也需要diffusion。这是为了解决位姿不精确问题，把原始位姿当成是新视角。通过cfg.train.raw_view_diffusion来配置（True,False）
     #       这种情况，训练时sample_iterations的第一个iter之前，还是用原始位姿训练。
     #       第一个iter开始，原始不精确位姿也参与diffusion
+=======
+    # Perform the actual training procedure
+    # 这是训练的主循环，从起始迭代（可能是从检查点恢复）到配置中设定的最大迭代次数。
+>>>>>>> Stashed changes
     for iteration in range(start_iter, training_args.iterations + 1):
+        # 记录性能分析步骤，用于监控训练性能。
         profiler_step()
-
+        # 记录当前迭代开始的时间戳，用于计算每次迭代的耗时。
         iter_start.record()  # type: ignore
+        # 根据当前迭代次数更新学习率，可能实现了学习率衰减策略。
         gaussians.update_learning_rate(iteration)
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
+        # 每1000次迭代，提升球谐函数(SH)的级别，这能提高渲染质量和细节表现。
         if iteration % 1000 == 0:
             gaussians.oneupSHdegree()
 
+<<<<<<< Updated upstream
         raw_view_diffusion = training_args.get('raw_view_diffusion', False)
+=======
+        # 判断是否需要运行扩散模型：
+        # - 如果当前是重启训练且上一次迭代在扩散采样列表中，或者
+        # 当前迭代在扩散采样列表中 则运行扩散模型为新视角生成高质量图像，这些图像将用于后续训练。
+>>>>>>> Stashed changes
         restarting = iteration == start_iter and iteration - 1 in diffusion_args.sample_iterations
         need_rediffusion = raw_view_diffusion and load_checkpoint and 'diffusion_original_image' not in train_viewpoint_stack[0].meta
         if use_diffusion and (iteration in diffusion_args.sample_iterations or restarting or need_rediffusion):
             run_diffusion_progress_for_novel_views(training_args, iteration, start_iter, scene, gaussians, diffusion_args, diffusion_runner, train_viewpoint_stack, viewpoint_stack)
 
+        # 从视角堆栈中随机采样一个相机视角，可能是训练视角或新视角。
         viewpoint_cam = sample_train_view(viewpoint_stack, training_camera_number)
+        # 获取当前视角的：
+        # - 原始图像作为真值
+        # - 掩码（如果存在，否则创建全1掩码）
+        # - 天空掩码（如果存在）
+        # - 物体边界（如果存在）
         gt_image = viewpoint_cam.original_image
         mask = viewpoint_cam.guidance['mask'] if 'mask' in viewpoint_cam.guidance else torch.ones_like(gt_image[0:1]).bool()
         sky_mask = viewpoint_cam.guidance['sky_mask'] if 'sky_mask' in viewpoint_cam.guidance else None
         obj_bound = viewpoint_cam.guidance['obj_bound'] if 'obj_bound' in viewpoint_cam.guidance else None
 
+        # 使用高斯点云渲染器从当前视角渲染场景，生成RGB图像、深度图等。
         render_pkg = gaussians_renderer.render(viewpoint_cam, gaussians)
+        # 从渲染结果中提取：
+        # - RGB图像
+        # - 累积透明度
+        # - 视空间点张量
+        # - 可见性过滤器
+        # - 点半径
+        # - 深度图
         image, acc, viewspace_point_tensor, visibility_filter, radii = render_pkg["rgb"], render_pkg['acc'], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         depth = render_pkg['depth']  # [1, H, W]
+<<<<<<< Updated upstream
         if raw_view_diffusion:
             is_novel_view = (not viewpoint_cam.meta['is_novel_view'] and iteration >= min(diffusion_args.sample_iterations)) or viewpoint_cam.meta['is_novel_view']
         else:
             is_novel_view = viewpoint_cam.meta['is_novel_view']
         if is_novel_view:
             scalar_dict, loss, image, mask, gt_image = get_novel_view_loss(diffusion_runner, viewpoint_cam, image, mask, optim_args, raw_view_diffusion)
+=======
+        # 根据当前视角类型计算损失：
+        # - 如果是新视角，使用扩散模型生成的图像作为监督信号计算损失
+        # - 如果是原始视角，使用真实图像计算损失，包括RGB损失、天空损失、深度损失等
+        if viewpoint_cam.meta['is_novel_view']:
+            scalar_dict, loss, image, mask, gt_image = get_novel_view_loss(diffusion_runner, viewpoint_cam, image, mask, optim_args)
+>>>>>>> Stashed changes
         else:
             scalar_dict, loss, acc = get_raw_view_loss(gaussians_renderer, gaussians, viewpoint_cam, acc, depth, image, gt_image, mask, sky_mask, obj_bound, iteration, optim_args)
 
+        # 记录损失值并执行反向传播，计算梯度。
         scalar_dict['loss'] = loss.item()
         loss.backward()
+        # 记录当前迭代结束的时间戳，用于计算迭代耗时。
         iter_end.record()  # type: ignore
 
         with torch.no_grad():
