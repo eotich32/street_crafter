@@ -126,7 +126,7 @@ class WaymoDiffusionRunner(DiffusionRunner):
     def __init__(self, scene: Scene):
         super(WaymoDiffusionRunner, self).__init__(scene)
 
-    def run(self, cameras: List[Camera], train_cameras: List[Camera], obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
+    def run(self, cameras: List[Camera], train_frames, obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
         cameras = [camera for camera in cameras if camera.meta['cam'] == 0 or camera.meta['cam'] == 1 or camera.meta['cam'] == 2]  # 3 camera
         diffusion_results = []
 
@@ -135,7 +135,7 @@ class WaymoDiffusionRunner(DiffusionRunner):
             print(f'Running diffusion for novel view sequence {novel_view_id}')
             cur_cameras = [camera for camera in cameras if camera.meta['novel_view_id'] == novel_view_id]
             cur_cameras = list(sorted(cur_cameras, key=lambda x: x.meta['frame']))
-            diffusion_result = self.run_sequence(cur_cameras, train_cameras, obj_meta, use_render, scale, masked_guidance)
+            diffusion_result = self.run_sequence(cur_cameras, train_frames, obj_meta, use_render, scale, masked_guidance)
             diffusion_results.append(diffusion_result)
 
         diffusion_results = torch.cat(diffusion_results, dim=0)
@@ -233,9 +233,8 @@ class WaymoDiffusionRunner(DiffusionRunner):
         return diffusion_result
 
     @torch.no_grad()
-    def run_sequence(self, cameras: List[Camera], train_cameras: List[Camera], obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
+    def run_sequence(self, cameras: List[Camera], train_frames, obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
         frames = [camera.meta['frame'] for camera in cameras]
-        train_frames = np.array([camera.meta['frame'] for camera in train_cameras])
 
         num_frames = len(frames)
         sample_frames = self.sample_frames - 1
@@ -348,8 +347,9 @@ class WaymoDiffusionRunner(DiffusionRunner):
         return diffusion_result
 
 class ImageDiffusionRunner():
-    def __init__(self, scene: Scene):
+    def __init__(self, scene: Scene, with_difix: bool=True):
         self.scene: Scene = scene
+        self.with_difix: Scene = with_difix
         assert self.scene.diffusion is None, 'Should not load video diffusion model'
         assert self.scene.pointcloud_processor is not None, 'Pointcloud processor is not found'
 
@@ -369,15 +369,6 @@ class ImageDiffusionRunner():
 
         self.diff_model = LidarPintoraConvIn(pretrained_path=cfg.diffusion.img_ckpt)
         self.diff_model.set_eval()
-
-        # use_difix = cfg.diffusion.get('use_difix', False)
-        # if use_difix:
-        #     self.difix_pipeline = DifixPipeline.from_pretrained("nvidia/difix_ref", trust_remote_code=True)
-        #     self.difix_pipeline.to("cuda")
-        #     print("======================== Image DIffusion Model Loaded, use difix as post processor")
-        # else:
-        #     self.difix_pipeline = None
-        #     print("======================== Image DIffusion Model Loaded")
 
     def get_diffusion(self):
         return self.scene.diffusion
@@ -440,42 +431,30 @@ class ImageDiffusionRunner():
     def preprocess_tensor(self, image_tensor):
         ori_h, ori_w = image_tensor.shape[-2:]
 
-        if ori_w / ori_h > self.target_width / self.target_height:
-            tmp_w = int(self.target_width / self.target_height * ori_h)
-            left = (ori_w - tmp_w) // 2
-            right = (ori_w + tmp_w) // 2
-            image_tensor = image_tensor[..., :, left:right]
-        elif ori_w / ori_h < self.target_width / self.target_height:
-            tmp_h = int(self.target_height / self.target_width * ori_w)
-            top = ori_h - tmp_h
-            bottom = ori_h
-            image_tensor = image_tensor[..., top:bottom, :]
+        # if ori_w / ori_h > self.target_width / self.target_height:
+        #     tmp_w = int(self.target_width / self.target_height * ori_h)
+        #     left = (ori_w - tmp_w) // 2
+        #     right = (ori_w + tmp_w) // 2
+        #     image_tensor = image_tensor[..., :, left:right]
+        # elif ori_w / ori_h < self.target_width / self.target_height:
+        #     tmp_h = int(self.target_height / self.target_width * ori_w)
+        #     top = ori_h - tmp_h
+        #     bottom = ori_h
+        #     image_tensor = image_tensor[..., top:bottom, :]
 
         transform_resize = transforms.Resize((self.target_height, self.target_width))
         image_tensor = transform_resize(image_tensor)
         return image_tensor
 
-    def run(self, cameras: List[Camera], train_cameras: List[Camera], obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
-        # cameras = [camera for camera in cameras if camera.meta['cam'] == 0 or camera.meta['cam'] == 1 or camera.meta['cam'] == 2]  # 3 camera
+    def run(self, cameras: List[Camera], train_frames, obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
         diffusion_results = []
         diffusion_save_dir = os.path.join(cfg.model_path, 'diffusion')
         os.makedirs(diffusion_save_dir, exist_ok=True)
         img_trans = transforms.ToPILImage()
         for camera in tqdm(cameras, desc='Running Image Diffusion'):
-            #print(">>>", camera.meta['guidance_rgb_path'], camera.meta['guidance_mask_path'])
             render_result = self.renderer.render_novel_view(camera, self.get_gaussian())['rgb'].detach()
-            #input_image = img_trans(render_result)
-            #input_image = Image.open(args.input_image).convert('RGB')
             ref_image = Image.open(camera.meta['guidance_rgb_path']).convert('RGB')
-            #input_image = input_image.crop((0, 166, 1600, 1066))
-            #ref_image = ref_image.crop((0, 166, 1600, 1066))   #waymo数据集需要统一尺寸
-            #new_width = 1024; new_height = 576
-            #input_image = input_image.resize((new_width, new_height), Image.LANCZOS)
-            #ref_image = ref_image.resize((new_width, new_height), Image.LANCZOS)
-
             with torch.no_grad():
-                #c_t = F.to_tensor(input_image).unsqueeze(0).cuda()
-                #c_ref = F.to_tensor(ref_image).unsqueeze(0).cuda()
                 c_t = self.preprocess_tensor(render_result).unsqueeze(0).cuda()
                 c_ref = self.preprocess_tensor(F.to_tensor(ref_image)).unsqueeze(0).cuda()
                 ref_mask = torch.any(c_ref > 0.20, dim=1, keepdim=True).float()
@@ -494,23 +473,9 @@ class ImageDiffusionRunner():
             save_path = save_path + f'.{cfg.data.get("img_format", "png")}' if f'.{cfg.data.get("img_format", "png")}' not in save_path else save_path
             #torchvision.utils.save_image(render_result, save_path)
             output_pil.save(save_path)
-            ref_pil.save(save_path.replace(f'.{cfg.data.get("img_format", "png")}', f'_ref.{cfg.data.get("img_format", "png")}'))
-            #assert "000020" not in camera.image_name, "Debug"
-            # if self.difix_pipeline is not None:
-            #     with torch.no_grad():
-            #         input_image = camera.meta['diffusion_original_image'].resize((1024, 576), Image.LANCZOS)
-            #         print(f'======== input_image.size:{input_image.size}, min:{input_image.min()}, max:{input_image.max()}')
-            #         prompt = "remove degradation"
-            #         ref_image = load_image(camera.meta['ref_frame_image']) # difix后处理用最临近的视角真值作参考
-            #         print(f'======== ref_image.size:{ref_image.size}, min:{ref_image.min()}, max:{ref_image.max()}')
-            #         ref_image = ref_image.resize((1024, 576), Image.LANCZOS)
-            #         output_image = self.difix_pipeline(prompt, image=input_image, ref_image=ref_image, num_inference_steps=1, timesteps=[199], guidance_scale=0.0).images[0]
-            #         output_image.save(save_path)
-            #         print(f'======== output_image.size:{output_image.size}, min:{output_image.min()}, max:{output_image.max()}')
-            #         camera.meta['diffusion_original_image'] = output_image
+            # ref_pil.save(save_path.replace(f'.{cfg.data.get("img_format", "png")}', f'_ref.{cfg.data.get("img_format", "png")}'))
 
-        use_difix = cfg.diffusion.get('use_difix', False)
-        if use_difix:
+        if self.with_difix:
             difix_pipeline = DifixPipeline.from_pretrained("nvidia/difix_ref", trust_remote_code=True)
             difix_pipeline.to("cuda")
             print("======================== Use Difix for diffusion post processing")
@@ -522,7 +487,15 @@ class ImageDiffusionRunner():
                     input_image = input_image.cpu().numpy()
                     input_image = Image.fromarray(input_image)
                     prompt = "remove degradation"
-                    ref_image = load_image(camera.meta['ref_frame_image']) # difix后处理用最临近的视角真值作参考
+                    if 'ref_frame_image' in camera.meta:
+                        # 对于人工设定的新视角，difix后处理用最临近的视角真值作参考
+                        ref_image = load_image(camera.meta['ref_frame_image']) # difix后处理用最临近的视角真值作参考
+                    else:
+                        # 对于把原始位姿当成新视角的情况，用原始图像真值作为参考
+                        ref_image = (camera.original_image * 255).clamp(0, 255).byte()
+                        ref_image = ref_image.permute(1, 2, 0)
+                        ref_image = ref_image.cpu().numpy()
+                        ref_image = Image.fromarray(ref_image)
                     ref_image = ref_image.resize((1024, 576), Image.LANCZOS)
                     output_image = difix_pipeline(prompt, image=input_image, ref_image=ref_image, num_inference_steps=1, timesteps=[199], guidance_scale=0.0).images[0]
                     save_path = os.path.join(diffusion_save_dir, camera.image_name)
@@ -532,10 +505,91 @@ class ImageDiffusionRunner():
                     output_image = output_image / 255.0
                     output_image = output_image.transpose(2, 0, 1)  # 转换后形状为 (3, 576, 1024)
                     output_image = torch.from_numpy(output_image)
-
                     camera.meta['diffusion_original_image'] = output_image.to('cuda', non_blocking=True)
 
-        return diffusion_results # empty list 
+        return diffusion_results # empty list
+
+
+class DifixDiffusionRunner():
+    def __init__(self, scene: Scene):
+        self.scene: Scene = scene
+        assert self.scene.diffusion is None, 'Should not load video diffusion model'
+        assert self.scene.pointcloud_processor is not None, 'Pointcloud processor is not found'
+
+        self.target_height = cfg.diffusion.height
+        self.target_width = cfg.diffusion.width
+
+        self.renderer = StreetGaussianRenderer()
+        self.difix_pipeline = DifixPipeline.from_pretrained("nvidia/difix_ref", trust_remote_code=True)
+        self.difix_pipeline.to("cuda")
+
+    def get_guidance(self, cameras: List[Camera]):
+        pointcloud_processor = self.scene.pointcloud_processor
+        pointcloud_processor.render_conditions(cameras, self.scene.dataset.getmeta('obj_meta'))  # type: ignore
+        guide_rgb_path = []
+        guide_mask_path = []
+        for camera in cameras:
+            assert os.path.exists(camera.meta['guidance_rgb_path'])
+            assert os.path.exists(camera.meta['guidance_mask_path'])
+            guide_rgb_path.append(camera.meta['guidance_rgb_path'])
+            guide_mask_path.append(camera.meta['guidance_mask_path'])
+
+        return guide_rgb_path, guide_mask_path
+
+    def preprocess_tensor(self, image_tensor):
+        # ori_h, ori_w = image_tensor.shape[-2:]
+        # if ori_w / ori_h > self.target_width / self.target_height:
+        #     tmp_w = int(self.target_width / self.target_height * ori_h)
+        #     left = (ori_w - tmp_w) // 2
+        #     right = (ori_w + tmp_w) // 2
+        #     image_tensor = image_tensor[..., :, left:right]
+        # elif ori_w / ori_h < self.target_width / self.target_height:
+        #     tmp_h = int(self.target_height / self.target_width * ori_w)
+        #     top = ori_h - tmp_h
+        #     bottom = ori_h
+        #     image_tensor = image_tensor[..., top:bottom, :]
+
+        transform_resize = transforms.Resize((self.target_height, self.target_width))
+        image_tensor = transform_resize(image_tensor)
+        return image_tensor
+
+    def run(self, cameras: List[Camera], train_frames, obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
+        diffusion_results = []
+        diffusion_save_dir = os.path.join(cfg.model_path, 'diffusion')
+        os.makedirs(diffusion_save_dir, exist_ok=True)
+        with torch.no_grad():
+            for camera in tqdm(cameras, desc='Rendering Difix'):
+                render_result = self.renderer.render_novel_view(camera, self.scene.gaussians)['rgb'].detach()
+
+                if 'ref_frame_image' in camera.meta:
+                    # 对于人工设定的新视角，difix后处理用最临近的视角真值作参考
+                    ref_image = load_image(camera.meta['ref_frame_image'])
+                else:
+                    # 对于把原始位姿当成新视角的情况，用原始图像真值作为参考
+                    ref_image = (camera.original_image * 255).clamp(0, 255).byte()
+                    ref_image = ref_image.permute(1, 2, 0)
+                    ref_image = ref_image.cpu().numpy()
+                    ref_image = Image.fromarray(ref_image)
+
+                ref_image = ref_image.resize((1024, 576), Image.LANCZOS)
+                c_t = self.preprocess_tensor(render_result).cuda()
+                input_image = (c_t * 255).clamp(0, 255).byte()
+                input_image = input_image.permute(1, 2, 0) # (1024,576,3)
+                input_image = input_image.cpu().numpy()
+                input_image = Image.fromarray(input_image)
+
+                prompt = "remove degradation"
+                output_image = self.difix_pipeline(prompt, image=input_image, ref_image=ref_image, num_inference_steps=1, timesteps=[199], guidance_scale=0.0).images[0]
+                save_path = os.path.join(diffusion_save_dir, camera.image_name)
+                save_path = save_path + f'.{cfg.data.get("img_format", "png")}' if f'.{cfg.data.get("img_format", "png")}' not in save_path else save_path
+                output_image.save(save_path)
+                output_image = np.array(output_image, dtype=np.float32)  # 形状为 (576, 1024, 3)
+                output_image = output_image / 255.0
+                output_image = output_image.transpose(2, 0, 1)  # 转换后形状为 (3, 576, 1024)
+                output_image = torch.from_numpy(output_image)
+                camera.meta['diffusion_original_image'] = output_image.to('cuda', non_blocking=True)
+        return diffusion_results # empty list
+
 
 DiffusionRunnerType = {
     "Waymo": WaymoDiffusionRunner,
@@ -544,7 +598,16 @@ DiffusionRunnerType = {
 
 
 def getDiffusionRunner(scene: Scene):
-    if cfg.diffusion.use_img_diffusion:
-        return ImageDiffusionRunner(scene)
+    # if cfg.diffusion.use_img_diffusion:
+    #     return ImageDiffusionRunner(scene)
+    # else:
+    #     return DiffusionRunnerType[cfg.data.type](scene)
+    diffusion_type = cfg.diffusion.get('diffusion_type', 'default')
+    if diffusion_type == 'difix':
+        return DifixDiffusionRunner(scene)
+    elif diffusion_type == 'lidar_painter':
+        return ImageDiffusionRunner(scene, with_difix=False)
+    elif diffusion_type == 'lidar_painter_with_difix':
+        return ImageDiffusionRunner(scene, with_difix=True)
     else:
         return DiffusionRunnerType[cfg.data.type](scene)

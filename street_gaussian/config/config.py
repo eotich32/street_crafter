@@ -124,7 +124,7 @@ cfg.model.color_correction.use_mlp = False  # If set to True, regress embedding 
 cfg.model.color_correction.use_sky = False  # If set to True, using spparate embedding for background and sky
 # Alternative choice from GOF: https://github.com/autonomousvision/gaussian-opacity-fields/blob/main/scene/appearance_network.py
 
-cfg.model.use_pose_correction = True  # If set to True, use pose correction for camera poses.
+cfg.model.use_pose_correction = False # If set to True, use pose correction for camera poses.
 cfg.model.pose_correction = CN()
 cfg.model.pose_correction.mode = 'image'  # If set to 'image', learn separate correction matrix for each image. If set to 'frame', learn a single correction matrix for all images corresponding to the same frame timestamp.
 ####
@@ -150,7 +150,7 @@ cfg.data.delta_frames = 10
 # data.regenerate_pcd: Regenerate the initialization point cloud.
 
 cfg.render = CN()
-cfg.render.antialiasing = True
+cfg.render.antialiasing = False 
 cfg.render.convert_SHs_python = False
 cfg.render.compute_cov3D_python = False
 cfg.render.debug = False
