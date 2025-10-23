@@ -42,6 +42,7 @@ class PoseCorrection(nn.Module):
         pose_correction_lr_init = args.get('pose_correction_lr_init', 5e-6)
         pose_correction_lr_final = args.get('pose_correction_lr_final', 1e-6)
         pose_correction_max_steps = args.get('pose_correction_max_steps', cfg.train.iterations)
+        print(f'==== camera_pose.py pose_correction_lr_init: {pose_correction_lr_init}, pose_correction_lr_final: {pose_correction_lr_final}')
         
         params = [
             {'params': [self.pose_correction_trans], 'lr': pose_correction_lr_init, 'name': 'pose_correction_trans'},

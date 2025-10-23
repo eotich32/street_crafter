@@ -61,6 +61,8 @@ cfg.optim.feature_lr = 0.0025
 cfg.optim.opacity_lr = 0.05
 cfg.optim.scaling_lr = 0.005
 cfg.optim.rotation_lr = 0.001
+cfg.optim.pose_correction_lr_init = 5e-4
+cfg.optim.pose_correction_lr_final = 1e-4
 # densification and pruning
 cfg.optim.percent_dense = 0.01
 cfg.optim.densification_interval = 100
