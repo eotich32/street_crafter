@@ -10,16 +10,12 @@
 
 转换可以得到dynamic_mask,images,ego_poses,extrinsics,intrinsics,track,vis_videos等，
 
-python data_processor/nuPlan_processor/nuplan-devkit/nuplan_converter.py
-
+conda activate streetcrafter
+python data_processor/nuPlan_processor/nuplan_converter.py \
 --nuplan_root /mnt/data/dataset/nuPlan/raw 
-
---log_name 2021.05.12.22.00.38_veh-35_01008_01518 
-
---save_dir /mnt/data/dataset/nuPlan/processed
-
---frame_num 200 
-
+--log_name 2021.05.12.22.00.38_veh-35_01008_01518 \
+--save_dir /mnt/data/dataset/nuPlan/processed/01518_frames_0_200 \
+--start_frame 0 --num_frames 200 \
 --cam_ids 0 1 2 3 4 5 6 7
 
 其中log_name是进行不同场景的选择，frame_num是进行选取多少帧，cam_ids是选择多少个相机。
@@ -27,23 +23,18 @@ python data_processor/nuPlan_processor/nuplan-devkit/nuplan_converter.py
 **3.nuplan_point_converter.py**
 
 转换可以得到background,actor点云，还有深度depth
-
-python data_processor/nuPlan_processor/nuplan-devkit/nuplan_point_converter.py
-
---nuplan_root /mnt/data/dataset/nuPlan/raw
-
---log_name 2021.05.12.22.00.38_veh-35_01008_01518
-
---save_dir /mnt/data/dataset/nuPlan/processed
+conda activate streetcrafter
+python data_processor/nuPlan_processor/nuplan_get_lidar_pcd.py \
+--nuplan_root /mnt/data/dataset/nuPlan/raw \
+--log_name 2021.05.12.22.00.38_veh-35_01008_01518 \
+--save_dir /mnt/data/dataset/nuPlan/processed/01518_frames_0_200 \
 
 其中log_name依旧是进行不同场景的选择
 
 **4.generate_sky_mask_with_8cams.py**
-
-python  data_processor/nuPlan_processor/generate_sky_mask_with_8cams.py 
-
---datadir /mnt/data/dataset/nuPlan/processed/2021.05.12.22.00.38_veh-35_01008_01518
-
+conda activate sky_mask_generate
+python  data_processor/nuPlan_processor/generate_sky_mask_with_8cams.py \
+--datadir /mnt/data/dataset/nuPlan/processed/2021.05.12.22.00.38_veh-35_01008_01518 \
 --sam_checkpoint /src/51sim-ai/street_crafter_copy/sky_checkpoint/sam_vit_h_4b8939.pth
 
 其中--datadir是处理后的数据目录
