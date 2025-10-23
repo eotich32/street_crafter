@@ -420,15 +420,11 @@ def training():
     #       这种情况，训练时sample_iterations的第一个iter之前，还是用原始位姿训练。
     #       第一个iter开始，原始不精确位姿也参与diffusion
     for iteration in range(start_iter, training_args.iterations + 1):
-        # 记录性能分析步骤，用于监控训练性能。
         profiler_step()
-        # 记录当前迭代开始的时间戳，用于计算每次迭代的耗时。
         iter_start.record()  # type: ignore
-        # 根据当前迭代次数更新学习率，可能实现了学习率衰减策略。
         gaussians.update_learning_rate(iteration)
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
-        # 每1000次迭代，提升球谐函数(SH)的级别，这能提高渲染质量和细节表现。
         if iteration % 1000 == 0:
             gaussians.oneupSHdegree()
 
@@ -438,27 +434,13 @@ def training():
         if use_diffusion and (iteration in diffusion_args.sample_iterations or restarting or need_rediffusion):
             run_diffusion_progress_for_novel_views(training_args, iteration, start_iter, scene, gaussians, diffusion_args, diffusion_runner, train_viewpoint_stack, viewpoint_stack)
 
-        # 从视角堆栈中随机采样一个相机视角，可能是训练视角或新视角。
         viewpoint_cam = sample_train_view(viewpoint_stack, training_camera_number)
-        # 获取当前视角的：
-        # - 原始图像作为真值
-        # - 掩码（如果存在，否则创建全1掩码）
-        # - 天空掩码（如果存在）
-        # - 物体边界（如果存在）
         gt_image = viewpoint_cam.original_image
         mask = viewpoint_cam.guidance['mask'] if 'mask' in viewpoint_cam.guidance else torch.ones_like(gt_image[0:1]).bool()
         sky_mask = viewpoint_cam.guidance['sky_mask'] if 'sky_mask' in viewpoint_cam.guidance else None
         obj_bound = viewpoint_cam.guidance['obj_bound'] if 'obj_bound' in viewpoint_cam.guidance else None
 
-        # 使用高斯点云渲染器从当前视角渲染场景，生成RGB图像、深度图等。
         render_pkg = gaussians_renderer.render(viewpoint_cam, gaussians)
-        # 从渲染结果中提取：
-        # - RGB图像
-        # - 累积透明度
-        # - 视空间点张量
-        # - 可见性过滤器
-        # - 点半径
-        # - 深度图
         image, acc, viewspace_point_tensor, visibility_filter, radii = render_pkg["rgb"], render_pkg['acc'], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         depth = render_pkg['depth']  # [1, H, W]
         if raw_view_diffusion:
@@ -470,10 +452,8 @@ def training():
         else:
             scalar_dict, loss, acc = get_raw_view_loss(gaussians_renderer, gaussians, viewpoint_cam, acc, depth, image, gt_image, mask, sky_mask, obj_bound, iteration, optim_args)
 
-        # 记录损失值并执行反向传播，计算梯度。
         scalar_dict['loss'] = loss.item()
         loss.backward()
-        # 记录当前迭代结束的时间戳，用于计算迭代耗时。
         iter_end.record()  # type: ignore
 
         with torch.no_grad():
