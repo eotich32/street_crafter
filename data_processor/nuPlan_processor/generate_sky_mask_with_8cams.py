@@ -161,7 +161,7 @@ def segment_with_text_prompt(datadir, BOX_TRESHOLD, TEXT_TRESHOLD, ignore_exists
         cv2.putText(merge_mask, text, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 3, (255, 0, 0), 2) 
         merge_masks.append(merge_mask)
     merge_masks_path = os.path.join(save_dir, 'mask.mp4')
-    imageio.mimwrite(merge_masks_path, merge_masks, fps=24)
+    # imageio.mimwrite(merge_masks_path, merge_masks, fps=24)
     
 
 if __name__ == "__main__":

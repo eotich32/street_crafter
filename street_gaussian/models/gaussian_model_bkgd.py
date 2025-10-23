@@ -114,7 +114,9 @@ class GaussianModelBkgd(GaussianModel):
         # Clone and Split
         extent = self.scene_radius
         self.densify_and_clone(grads, max_grad, extent)
-        self.densify_and_split(grads, max_grad, extent)
+        bg_max_pts = cfg.optim.get('bkgd_max_points', 1e7)
+        if len(self.get_xyz) < bg_max_pts:
+            self.densify_and_split(grads, max_grad, extent)
 
         # Prune points below opacity
         prune_mask = (self.get_opacity < min_opacity).squeeze()

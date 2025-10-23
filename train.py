@@ -18,6 +18,7 @@ from tqdm import tqdm
 from street_gaussian.utils.system_utils import searchForMaxIteration
 from street_gaussian.utils.diffusion_utils import getDiffusionRunner
 from argparse import ArgumentParser, Namespace
+from data_processor.waymo_processor import waymo_helpers
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -362,6 +363,20 @@ def training():
     optim_args = cfg.optim
     data_args = cfg.data
     diffusion_args = cfg.diffusion
+
+    if cfg.data.get('image_widths', None) is not None:
+        waymo_helpers.image_widths.clear()
+        waymo_helpers.image_widths.extend(cfg.data.get('image_widths'))
+    if cfg.data.get('image_heights', None) is not None:
+        waymo_helpers.image_heights.clear()
+        waymo_helpers.image_heights.extend(cfg.data.get('image_heights'))
+
+    if cfg.data.get('_camera2label', None) is not None:
+        waymo_helpers._camera2label.clear()
+        waymo_helpers._camera2label.update(dict(cfg.data.get('_camera2label')))
+    if cfg.data.get('_label2camera', None) is not None:
+        waymo_helpers._label2camera.clear()
+        waymo_helpers._label2camera.update(dict(cfg.data.get('_label2camera')))
 
     tb_writer = prepare_output_and_logger()
 
