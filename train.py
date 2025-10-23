@@ -64,15 +64,15 @@ def diffusion_inference_worker(device_id, scene_metadata, obj_meta, novel_viewpo
         cfg.loaded_iter = iteration
         torch.cuda.set_device(device_id)
         device = torch.device(f'cuda:{device_id}')
-        scene, train_viewpoint_stack = create_scene_for_diffusion_inference(scene_metadata, device=device)
-        print(f'===================== Diffusion runner in gpu:{device_id}, num of novel_viewpoint_stack: {len(novel_viewpoint_stack)}, num of train_viewpoint_stack: {len(train_viewpoint_stack)}, use_img_diffusion: {cfg.diffusion.use_img_diffusion}')
+        scene, train_frames = create_scene_for_diffusion_inference(scene_metadata, device=device)
+        print(f'===================== Diffusion runner in gpu:{device_id}, num of novel_viewpoint_stack: {len(novel_viewpoint_stack)}, use_img_diffusion: {cfg.diffusion.use_img_diffusion}')
         diffusion_runner = getDiffusionRunner(scene)
         for v in novel_viewpoint_stack:
             v.set_device('cuda')
         with torch.no_grad():
             diffusion_runner.run(
                 novel_viewpoint_stack,
-                train_viewpoint_stack,
+                train_frames,
                 obj_meta=obj_meta,
                 use_render=True,
                 scale=scale,
@@ -299,7 +299,8 @@ def run_diffusion_progress_for_novel_views(training_args, iteration, restarting,
 
         if cfg.diffusion_parallel == 0:
             # 在主进程中同时进行3DGS和diffusion推理
-            diffusion_result = diffusion_runner.run(novel_viewpoint_stack, train_viewpoint_stack,
+            train_frames = [camera.meta['frame'] for camera in train_viewpoint_stack]
+            diffusion_result = diffusion_runner.run(novel_viewpoint_stack, train_frames,
                                                     scene.dataset.getmeta('obj_meta'), use_render=True, scale=scale,
                                                     masked_guidance=iteration >= cfg.diffusion.masked_guidance_iter)  # type: ignore
         else:

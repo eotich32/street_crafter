@@ -126,7 +126,7 @@ class WaymoDiffusionRunner(DiffusionRunner):
     def __init__(self, scene: Scene):
         super(WaymoDiffusionRunner, self).__init__(scene)
 
-    def run(self, cameras: List[Camera], train_cameras: List[Camera], obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
+    def run(self, cameras: List[Camera], train_frames, obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
         cameras = [camera for camera in cameras if camera.meta['cam'] == 0 or camera.meta['cam'] == 1 or camera.meta['cam'] == 2]  # 3 camera
         diffusion_results = []
 
@@ -135,7 +135,7 @@ class WaymoDiffusionRunner(DiffusionRunner):
             print(f'Running diffusion for novel view sequence {novel_view_id}')
             cur_cameras = [camera for camera in cameras if camera.meta['novel_view_id'] == novel_view_id]
             cur_cameras = list(sorted(cur_cameras, key=lambda x: x.meta['frame']))
-            diffusion_result = self.run_sequence(cur_cameras, train_cameras, obj_meta, use_render, scale, masked_guidance)
+            diffusion_result = self.run_sequence(cur_cameras, train_frames, obj_meta, use_render, scale, masked_guidance)
             diffusion_results.append(diffusion_result)
 
         diffusion_results = torch.cat(diffusion_results, dim=0)
@@ -233,9 +233,8 @@ class WaymoDiffusionRunner(DiffusionRunner):
         return diffusion_result
 
     @torch.no_grad()
-    def run_sequence(self, cameras: List[Camera], train_cameras: List[Camera], obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
+    def run_sequence(self, cameras: List[Camera], train_frames, obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
         frames = [camera.meta['frame'] for camera in cameras]
-        train_frames = np.array([camera.meta['frame'] for camera in train_cameras])
 
         num_frames = len(frames)
         sample_frames = self.sample_frames - 1
@@ -447,7 +446,7 @@ class ImageDiffusionRunner():
         image_tensor = transform_resize(image_tensor)
         return image_tensor
 
-    def run(self, cameras: List[Camera], train_cameras: List[Camera], obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
+    def run(self, cameras: List[Camera], train_frames, obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
         diffusion_results = []
         diffusion_save_dir = os.path.join(cfg.model_path, 'diffusion')
         os.makedirs(diffusion_save_dir, exist_ok=True)
@@ -554,7 +553,7 @@ class DifixDiffusionRunner():
         image_tensor = transform_resize(image_tensor)
         return image_tensor
 
-    def run(self, cameras: List[Camera], train_cameras: List[Camera], obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
+    def run(self, cameras: List[Camera], train_frames, obj_meta, use_render=True, scale: float = 0.3, masked_guidance: bool = False):
         diffusion_results = []
         diffusion_save_dir = os.path.join(cfg.model_path, 'diffusion')
         os.makedirs(diffusion_save_dir, exist_ok=True)

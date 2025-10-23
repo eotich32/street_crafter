@@ -66,8 +66,8 @@ def create_scene_for_diffusion_inference(scene_meta, device='cuda'):
     assert dataset_type in sceneLoadTypeCallbacks.keys(), 'Could not recognize scene type!'
     scene_info = sceneLoadTypeCallbacks[dataset_type](cfg.source_path, **cfg.data)
     # print(f'=================== len(scene_info.train_cameras): {len(scene_info.train_cameras)}')
-    train_cameras = cameraList_from_camInfos(scene_info.train_cameras, 1)
-    return scene, train_cameras
+    # train_cameras = cameraList_from_camInfos(scene_info.train_cameras, 1)
+    return scene, [camera.metadata['frame'] for camera in scene_info.train_cameras]
 
 
 def create_scene_with_cooperating_gaussians(device='cuda'):
