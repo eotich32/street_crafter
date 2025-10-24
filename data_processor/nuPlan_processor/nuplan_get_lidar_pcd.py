@@ -9,7 +9,7 @@ from scipy.spatial.transform import Rotation
 from plyfile import PlyData, PlyElement
 import cv2
 import sys
-nuplan_dir = os.path.abspath('data_processor/nuPlan_processor/nuplan-devkit')
+nuplan_dir = os.path.abspath('nuplan-devkit')
 if nuplan_dir not in sys.path:
     sys.path.append(nuplan_dir)
 from nuplan.database.nuplan_db_orm.utils import load_pointcloud_from_pc
