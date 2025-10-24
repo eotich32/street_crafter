@@ -13,10 +13,8 @@ from huggingface_hub import hf_hub_download
 from tqdm import tqdm
 from termcolor import colored
 from glob import glob
-from data_processor.waymo_processor.waymo_helpers import image_filename_to_cam, image_filename_to_frame
 
 # Grounding DINO
-import groundingdino.datasets.transforms as T
 from groundingdino.models import build_model
 from groundingdino.util import box_ops
 from groundingdino.util.slconfig import SLConfig
@@ -28,7 +26,10 @@ import supervision as sv
 from segment_anything import build_sam, SamPredictor 
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
+
+
+def image_filename_to_cam(x): return int(x.split('.')[0][-1])
+def image_filename_to_frame(x): return int(x.split('.')[0][:6])
 
 
 def setup(args):
