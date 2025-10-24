@@ -375,8 +375,10 @@ def training():
         waymo_helpers._camera2label.clear()
         waymo_helpers._camera2label.update(dict(cfg.data.get('_camera2label')))
     if cfg.data.get('_label2camera', None) is not None:
+        _label2camera = dict(cfg.data.get('_label2camera'))
+        _label2camera = {int(k[1:]): v for k,v in _label2camera.items()} # yaml中的key为_0, _1的格式，因为不能直接用整数0,1。这里转成整数
         waymo_helpers._label2camera.clear()
-        waymo_helpers._label2camera.update(dict(cfg.data.get('_label2camera')))
+        waymo_helpers._label2camera.update(_label2camera)
 
     tb_writer = prepare_output_and_logger()
 
