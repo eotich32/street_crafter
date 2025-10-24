@@ -30,7 +30,7 @@ _label2camera = {
     #5: 'BACK',
 }
 
-waymo_track2label = {"vehicle": 0, "pedestrian": 1, "cyclist": 2, "sign": 3, "misc": -1}
+waymo_track2label = {"vehicle": 0, "pedestrian": 1, "bicycle": 2, "cyclist": 2, "sign": 3, "misc": -1}
 LANE_SHIFT_SIGN: Dict[str, Literal[-1, 1]] = defaultdict(lambda: -1)
 LANE_SHIFT_SIGN.update(
     {
