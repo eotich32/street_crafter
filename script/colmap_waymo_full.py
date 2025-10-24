@@ -117,9 +117,8 @@ def run_colmap_waymo(result):
             --ImageReader.camera_model SIMPLE_PINHOLE  \
             --ImageReader.single_camera_per_folder 1 \
             --database_path {colmap_dir}/database.db \
-            --image_path {train_images_dir} \
-            --SiftExtraction.use_gpu 0')
-
+            --image_path {train_images_dir}')
+            #--SiftExtraction.use_gpu 0
     # load intrinsic
     camera_infos = dict()
     for unique_cam in unique_cams:
