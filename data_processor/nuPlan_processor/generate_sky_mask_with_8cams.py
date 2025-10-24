@@ -13,7 +13,7 @@ from huggingface_hub import hf_hub_download
 from tqdm import tqdm
 from termcolor import colored
 from glob import glob
-from data_processor.waymo_processor.waymo_helpers_change import image_filename_to_cam, image_filename_to_frame
+from data_processor.waymo_processor.waymo_helpers import image_filename_to_cam, image_filename_to_frame
 
 # Grounding DINO
 import groundingdino.datasets.transforms as T
