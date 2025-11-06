@@ -1,45 +1,51 @@
-#!/usr/bin/env python3
-"""
-nuplan-devkit 导出脚本
-- 每相机 200 帧，时间戳不再四舍五入，采用“相邻最近”匹配
-- 图像-点云、图像-图像全部按绝对最近原则配对
-"""
-import os
-import argparse
-import json
-import shutil
-import math
 from tqdm import tqdm
-from PIL import Image
-import numpy as np
-from collections import defaultdict
-from scipy.spatial.transform import Rotation
-import cv2, imageio
-from copy import deepcopy
-import pickle
-import torch
-import pandas as pd
+import json
+import os
 import sys
+from typing import Dict, List
+import argparse
+import pickle
+
+import numpy as np
+from PIL import Image
+from pyquaternion import Quaternion
+from scipy.spatial.transform import Rotation
+
 nuplan_dir = os.path.abspath('nuplan-devkit')
 if nuplan_dir not in sys.path:
     sys.path.append(nuplan_dir)
+
+from nuplan.database.nuplan_db.nuplan_scenario_queries import get_images_from_lidar_tokens
 from nuplan.database.nuplan_db_orm.nuplandb import NuPlanDB
+from nuplan.database.nuplan_db_orm.nuplandb_wrapper import NuPlanDBWrapper
+from nuplan.database.utils.pointclouds.lidar import LidarPointCloud
 
-# ---------- 工具 ----------
-def makedirs(p):
-    os.makedirs(p, exist_ok=True)
+# from datasets.tools.multiprocess_utils import track_parallel_progress
+from geometry import get_corners, project_camera_points_to_image
+# from utils.visualization import color_mapper, dump_3d_bbox_on_image
+from nuplan_utils import get_egopose3d_for_lidarpc_token_from_db, get_tracked_objects_for_lidarpc_token_from_db
+import cv2
 
-opencv2camera = np.array([[0., 0., 1., 0.],
-                          [-1., 0., 0., 0.],
-                          [0., -1., 0., 0.],
-                          [0., 0., 0., 1.]])
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(project_root)
+from waymo_processor.waymo_helpers import load_track, load_calibration, load_ego_poses, get_object, \
+    project_label_to_image, project_label_to_mask, draw_3d_box_on_img, opencv2camera
+from types import SimpleNamespace
 
-# 不再四舍五入，保持原始微秒
-def identity_ts(ts_us):
-    return int(ts_us)
+NUPLAN_LABELS = [
+    'vehicle', 'pedestrian', 'bicycle'
+]
+NUPLAN_NONRIGID_DYNAMIC_CLASSES = [
+    'pedestrian', 'bicycle'
+]
+NUPLAN_RIGID_DYNAMIC_CLASSES = [
+    'vehicle'
+]
+NUPLAN_DYNAMIC_CLASSES = NUPLAN_NONRIGID_DYNAMIC_CLASSES + NUPLAN_RIGID_DYNAMIC_CLASSES
+img_width, img_height = 1920, 1080  # 去畸变后也是这个，没改变
 
-# ---------- 去畸变 ----------
-def undistort_image(img_path, K, D, dst_size=(1920, 1080)):
+
+def undistort_image(img_path, K, D, dst_size=(img_width, img_height)):
     img = cv2.imread(img_path)
     if img is None:
         return np.zeros((dst_size[1], dst_size[0], 3), np.uint8), K
@@ -49,457 +55,510 @@ def undistort_image(img_path, K, D, dst_size=(1920, 1080)):
     dst = cv2.remap(img, map1, map2, cv2.INTER_LINEAR)
     return dst, new_K
 
-# ---------- 3D 投影 ----------
-@torch.no_grad()
-def project_visible_boxes(poses_v, dims, K, E, w, h, tid_list):
-    device = K.device
-    N = len(poses_v)
-    if N == 0:
-        return []
-    T_ego2cam = torch.linalg.inv(E)
-    x = torch.tensor([-1,1,1,-1,-1,1,1,-1], device=device)*0.5
-    y = torch.tensor([1,1,-1,-1,1,1,-1,-1], device=device)*0.5
-    z = torch.tensor([-1,-1,-1,-1,1,1,1,1], device=device)*0.5
-    corners_template = torch.stack([x,y,z,torch.ones(8,device=device)])
-    out = []
-    for i in range(N):
-        l, w, h = dims[i]
-        S = torch.diag(torch.tensor([l, w, h, 1.], device=device))
-        T = torch.from_numpy(poses_v[i]).to(device)
-        corners = T @ S @ corners_template
-        corners_cam = T_ego2cam @ corners
-        pts2d = K @ corners_cam[:3]
-        uv = pts2d[:2] / (pts2d[2:3] + 1e-6)
-        valid = (uv[0] >= 0) & (uv[0] < w) & (uv[1] >= 0) & (uv[1] < h) & (corners_cam[2] > 0)
-        if valid.any():
-            out.append((uv.T.cpu().numpy(), valid.cpu().numpy(), tid_list[i]))
-    return out
+
+def quaternion_yaw(q) -> float:
+    """从四元数计算偏航角(绕Z轴的旋转角度)"""
+    x, y, z, w = q
+    yaw = np.arctan2(2 * (w * z + x * y), 1 - 2 * (y ** 2 + z ** 2))
+    return yaw
+
+
+def dict_to_namespace(data):
+    """递归将字典转换为 SimpleNamespace 对象"""
+    if isinstance(data, dict):
+        # 递归处理每个键值对
+        return SimpleNamespace(**{
+            k: dict_to_namespace(v) for k, v in data.items()
+        })
+    elif isinstance(data, list):
+        # 处理列表中的元素（若包含字典）
+        return [dict_to_namespace(item) for item in data]
+    else:
+        # 普通值直接返回
+        return data
+
 
 def compute_3d_box_corners(dim, pose):
     l, w, h = dim
-    x = np.array([-l, l, l, -l, -l, l, l, -l])/2
+    x = np.array([-l, l, l, -l, -l, l, l, -l]) / 2
     y = np.array([w, w, -w, -w, w, w, -w, -w]) / 2
-    z = np.array([-h/2, -h/2, -h/2, -h/2, h/2, h/2, h/2, h/2])
+    z = np.array([-h / 2, -h / 2, -h / 2, -h / 2, h / 2, h / 2, h / 2, h / 2])
     pts = np.stack([x, y, z, np.ones(8)], axis=0)
     pts = (pose @ pts)[:3, :].T
     return pts
 
-# ---------- 相机 ID 映射 ----------
-def _build_cam_id_map(db):
-    cameras = getattr(db, 'camera', None) or (db.get('camera') if hasattr(db, 'get') else None) or []
-    return {cam.channel: idx for idx, cam in enumerate(cameras)}
 
-# ---------- 每相机 200 帧（原始时间戳） ----------
-def _build_per_camera_frames(db, start_frame=0, num_frames=200):
-    Image = db.image[0].__class__
-    query = (db.session.query(Image)
-                       .order_by(Image.timestamp)
-                       .offset(8 * start_frame )
-                       .limit(8 * num_frames ))
-    all_rows = query.all()
-    cam_chunks = defaultdict(list)
-    for img in all_rows:
-        parts = img.filename_jpg.split('/')
-        if len(parts) < 3:
-            continue
-        cam_name = parts[1]
-        if len(cam_chunks[cam_name]) < num_frames:
-            cam_chunks[cam_name].append((img.timestamp, img))   # 原始 ts
-    result = []
-    cam_id_map = {name: idx for idx, name in enumerate(cam_chunks.keys())}
-    for cam_name, ts_imgs in cam_chunks.items():
-        cam_id = cam_id_map[cam_name]
-        for new_idx, (ts, img) in enumerate(ts_imgs):
-            result.append((new_idx, img, ts, cam_id, img.filename_jpg))
-    return result, cam_id_map
+class NuPlanProcessor(object):
+    """Process NUPLAN Dataset
 
-# ---------- 点云最近查找表 ----------
-def build_lidar_nearest_lut(pc_df):
-    pc_ts = pc_df['timestamp'].values.astype(np.int64)
-    pc_tok = pc_df['token'].values
-    def find_nearest(ts_us):
-        diff = np.abs(pc_ts - ts_us)
-        idx = diff.argmin()
-        return pc_tok[idx], pc_ts[idx]
-    return find_nearest
+    NuPlan Datasets provides 8 cameras and Merged Lidar data.
+    Cameras works in 10Hz and Lidar works in 20Hz. Thus we process at 10Hz.
+    The duration of each scene is around 8 mins, resulting in ~5000 frames.
+    We only process the first max_frame_limit(default=300) frames.
 
-# ---------- 内存表 ----------
-def build_df(db):
-    cam_df = pd.DataFrame([
-        dict(channel=c.channel, K=c.intrinsic_np, D=c.distortion_np,
-             E=c.trans_matrix, width=c.width, height=c.height, token=c.token)
-        for c in db.camera
-    ])
-    ego_df = pd.DataFrame([
-        dict(token=e.token, timestamp=e.timestamp,
-             x=e.x, y=e.y, z=e.z, qx=e.qx, qy=e.qy, qz=e.qz, qw=e.qw)
-        for e in db.ego_pose
-    ])
-    pc_df = pd.DataFrame([
-        dict(token=pc.token, ego_pose_token=pc.ego_pose_token, timestamp=pc.timestamp)
-        for pc in db.lidar_pc
-    ])
-    track_df = pd.DataFrame([
-        dict(token=t.token, category_token=t.category_token)
-        for t in db.track
-    ])
-    box_df = pd.DataFrame([
-        dict(token=b.token, lidar_pc_token=b.lidar_pc_token, track_token=b.track_token,
-             x=b.x, y=b.y, z=b.z, width=b.width, length=b.length, height=b.height,
-             yaw=b.yaw, vx=b.vx, vy=b.vy, vz=b.vz, confidence=b.confidence)
-        for b in db.lidar_box
-    ])
-    box_df = box_df.merge(pc_df[['token','timestamp']].rename(columns={'token':'lidar_pc_token'}),
-                          on='lidar_pc_token', how='left')
-    box_df = box_df.merge(track_df[['token','category_token']].rename(columns={'token':'track_token'}),
-                          on='track_token', how='left')
-    cat_df = pd.DataFrame([dict(token=c.token, name=c.name) for c in db.category])
-    box_df = box_df[box_df.category_token.map(
-        cat_df.set_index('token').name.isin(['vehicle','bicycle','pedestrian'])
-    )]
-    return cam_df, ego_df, pc_df, box_df, cat_df
+    Args:
+        load_dir (str): Directory to load data.
+        save_dir (str): Directory to save data in processed format.
+        prefix (str): Prefix of filename.
+        workers (int, optional): Number of workers for the parallel process.
+        process_keys (list, optional): List of keys to process. Default: ["images", "lidar", "calib", "dynamic_masks", "objects"]
+        process_log_list (list, optional): List of scene indices to process. Default: None
+    """
 
-# ---------- GPU 批量投影 ----------
-@torch.no_grad()
-def batch_project_to_cam(boxes_ego, Ks, Es, widths, heights):
-    N = boxes_ego.shape[0]
-    C = Ks.shape[0]
-    pts = torch.cat([boxes_ego, torch.ones(N,1, device=boxes_ego.device)], dim=1)
-    pts_cam = Es @ pts.T
-    pts_cam = pts_cam[:,:3]
-    z = pts_cam[:,2]
-    uv = Ks @ pts_cam
-    uv = uv[:,:2]/(uv[:,2:3]+1e-6)
-    u,v = uv[:,0], uv[:,1]
-    visible = (z>0)&(u>=0)&(u<widths.view(-1,1))&(v>=0)&(v<heights.view(-1,1))
-    return visible.T
+    def __init__(
+            self,
+            load_dir='data/nuplan/raw',
+            save_dir='data/nuplan/processed/test',
+            prefix='mini',
+            start_frame_idx=1000,
+            max_frame_limit=300,
+            process_keys=[
+                "images",
+                "pose",
+                "calib",
+                "lidar",
+                "dynamic_masks",
+                "objects"
+            ],
+            process_id_list=None,
+            workers=64,
+    ):
+        self.HW = (img_height, img_width)
+        print("Raw Image Resolution: ", self.HW)
+        self.process_keys = process_keys
+        print("will process keys: ", self.process_keys)
+        self.start_frame_idx = start_frame_idx
+        print("We will skip the first {} frames".format(self.start_frame_idx))
+        self.max_frame_limit = max_frame_limit
+        print("We will process the first {} frames each scene".format(self.max_frame_limit))
+        # the lidar data is collected at 20Hz, we need to downsample to 10Hz to match the camera data
+        self.lidar_idxs = range(self.start_frame_idx, self.start_frame_idx + self.max_frame_limit * 2, 2)
 
-# ---------- 主导出（GPU） ----------
-def export_track_trajectory_gpu(db, ts_slice, cam_id_map, ego_cache, save_dir,
-                                skip_existing=False, cam_newK_dict=None,valid_cam_ids=None):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    track_dir = os.path.join(save_dir, 'track'); os.makedirs(track_dir, exist_ok=True)
-    if cam_newK_dict is None:
-        print("去畸变后的相机外参没有正确传入函数")
+        # NUPLAN Provides 8 cameras
+        self.cam_list = [  # {frame_idx}_{cam_id}.jpg
+            "CAM_F0",  # "xxx_0.jpg"
+            "CAM_L0",  # "xxx_1.jpg"
+            "CAM_R0",  # "xxx_2.jpg"
+            "CAM_L1",  # "xxx_3.jpg"
+            "CAM_R1",  # "xxx_4.jpg"
+            "CAM_L2",  # "xxx_5.jpg"
+            "CAM_R2",  # "xxx_6.jpg"
+            "CAM_B0"  # "xxx_7.jpg"
+        ]
 
-    cam_df, ego_df, pc_df, box_df, cat_df = build_df(db)
-    ep2newidx = {img.ego_pose_token: new_idx for new_idx, img, _, _, _ in ts_slice}
-    pc2ep = dict(zip(pc_df.token, pc_df.ego_pose_token))
-    box_df = box_df[box_df.lidar_pc_token.map(pc2ep).isin(ep2newidx)]
-    box_df['ep'] = box_df.lidar_pc_token.map(pc2ep)
-    box_df['new_idx'] = box_df.ep.map(ep2newidx)
-
-    cam_df['cam_id'] = cam_df.channel.map(cam_id_map)
-    cam_df = cam_df.sort_values('cam_id')
-    Ks = torch.stack([torch.from_numpy(np.array(c.K, dtype=np.float32)) for _, c in cam_df.iterrows()]).to(device)
-    Es = torch.stack([torch.from_numpy(np.array(c.E, dtype=np.float32)) for _, c in cam_df.iterrows()]).to(device)
-    widths = torch.tensor(cam_df.width.values, device=device)
-    heights = torch.tensor(cam_df.height.values, device=device)
-
-    world2ego_cache = {ego.token: np.linalg.inv(ego_cache[ego.token][1]) for ego in db.ego_pose}
-
-    CONF_THR = 0.4
-    V_STILL = 0.5
-    box_df['speed'] = np.hypot(box_df.vx, box_df.vy)
-    box_df['stationary'] = box_df.speed <= V_STILL
-    box_df = box_df[box_df.confidence >= CONF_THR]
-
-    frames = defaultdict(list)
-    for _, row in box_df.iterrows():
-        frames[row.new_idx].append(row)
-
-    track_info = defaultdict(dict)
-    track_camera_visible = defaultdict(lambda: defaultdict(list))
-    trajectory = {}
-
-    cam_param_cpu = {}
-    for _, row in cam_df.iterrows():
-        cam_id = int(row.cam_id)
-        K_use = cam_newK_dict.get(cam_id, np.array(row.K, dtype=np.float64))
-        cam_param_cpu[cam_id] = dict(K=K_use, D=np.zeros(5),
-                                     E=np.array(row.E, dtype=np.float64),
-                                     w=int(row.width), h=int(row.height))
-
-    for new_idx, rows in tqdm(frames.items(), desc='gpu track'):
-        frame_key = f"{new_idx:06d}"
-        for r in rows:
-            ego_T = world2ego_cache[r.ep]
-            center_world = np.array([r.x, r.y, r.z, 1.0])
-            R_world_to_ego = ego_T[:3, :3]
-            yaw_world = r.yaw
-            R_obj_world = Rotation.from_euler('z', yaw_world).as_matrix()
-            R_obj_ego = R_world_to_ego @ R_obj_world
-            yaw_ego = Rotation.from_matrix(R_obj_ego).as_euler('xyz')[2]
-            center_ego = (ego_T @ center_world)[:3]
-            box_dict = dict(center_x=float(center_ego[0]),
-                            center_y=float(center_ego[1]),
-                            center_z=float(center_ego[2]),
-                            width=r.width, length=r.length, height=r.height,
-                            #heading=r.yaw,
-                            heading=yaw_ego,
-                            velocity=np.array([r.vx, r.vy, r.vz]),
-                            label=cat_df.set_index('token').loc[r.category_token, 'name'],
-                            timestamp=ego_cache[r.ep][0])
-            track_info[frame_key][r.track_token] = {}
-            track_info[frame_key][r.track_token]['lidar_box'] = box_dict
-
-            if r.track_token not in trajectory:
-                trajectory[r.track_token] = dict(label=box_dict['label'],
-                                                 frames=[], poses_vehicle=[], poses_world=[],
-                                                 timestamps=[], height=r.height, width=r.width,
-                                                 length=r.length, stationary=True, deformable=False,
-                                                 symmetric=True)
-            traj = trajectory[r.track_token]
-            T_obj_ego = np.array(
-                [[np.cos(yaw_ego), -np.sin(yaw_ego), 0, center_ego[0]],
-                 [np.sin(yaw_ego), np.cos(yaw_ego), 0, center_ego[1]],
-                 [0, 0, 1, center_ego[2]],
-                 [0, 0, 0, 1]], dtype=np.float32)
-            corners_ego = compute_3d_box_corners([r.length, r.width, r.height], T_obj_ego)
-            corners_ego_h = np.hstack([corners_ego, np.ones((8, 1))])
-            for cam_id, cam_p in cam_param_cpu.items():
-                K, D, E, w, h = cam_p['K'], cam_p['D'], cam_p['E'], cam_p['w'], cam_p['h']
-                ego2cam = np.linalg.inv(E)
-                pts_cam = (ego2cam @ corners_ego_h.T)[:3].T
-                uv, _ = cv2.projectPoints(pts_cam, np.zeros((3, 1)), np.zeros((3, 1)), K, D)
-                uv = uv.squeeze()
-                inside = (uv[:, 0] >= 0) & (uv[:, 0] < w) & (uv[:, 1] >= 0) & (uv[:, 1] < h) & (pts_cam[:, 2] > 0)
-                if inside.any():
-                    track_camera_visible[frame_key][cam_id].append(r.track_token)
-
-    for t_token, sub in box_df.groupby('track_token'):
-        sub = sub.sort_values('timestamp')
-        frames = sub.new_idx.tolist()
-        poses_v, poses_w = [], []
-        for _, r in sub.iterrows():
-            ego_T = world2ego_cache[r.ep]
-            R_world_to_ego = ego_T[:3, :3]
-            yaw_world = r.yaw
-            R_obj_world = Rotation.from_euler('z', yaw_world).as_matrix()
-            R_obj_ego = R_world_to_ego @ R_obj_world
-            yaw_ego = Rotation.from_matrix(R_obj_ego).as_euler('xyz')[2]
-            center_world = np.array([r.x, r.y, r.z, 1.0])
-            center_ego = (ego_T @ center_world)[:3]
-            T_obj_ego = np.array(
-                [[np.cos(yaw_ego), -np.sin(yaw_ego), 0, center_ego[0]],
-                 [np.sin(yaw_ego), np.cos(yaw_ego), 0, center_ego[1]],
-                 [0, 0, 1, center_ego[2]],
-                 [0, 0, 0, 1]], dtype=np.float32)
-            T_obj_world = ego_T @ T_obj_ego
-            poses_v.append(T_obj_ego.astype(np.float32))
-            poses_w.append(T_obj_world.astype(np.float32))
-        dim = np.array([sub.height.max(), sub.width.max(), sub.length.max()], dtype=np.float32)
-        label = cat_df.set_index('token').loc[sub.category_token.iloc[0], 'name']
-        stationary = bool(box_df[box_df.track_token == t_token].stationary.all())
-        if len(frames) < 2:
-            continue
-        trajectory[t_token] = dict(
-            label=label,
-            height=dim[0], width=dim[1], length=dim[2],
-            poses_vehicle=np.array(poses_v),
-            frames=frames,
-            timestamps=sub.timestamp.tolist(),
-            stationary=stationary,
-            symmetric=(label != 'pedestrian'),
-            deformable=(label == 'pedestrian')
+        self.sensor_blobs_dir = os.path.join(load_dir, 'nuplan-v1.1', 'sensor_blobs')
+        self.split_dir = os.path.join(load_dir, 'nuplan-v1.1', 'splits', prefix)
+        self.nuplandb_wrapper = NuPlanDBWrapper(
+            data_root=os.path.join(load_dir, 'nuplan-v1.1'),
+            map_root=os.path.join(load_dir, 'maps'),
+            db_files=self.split_dir,
+            map_version='nuplan-maps-v1.0',
         )
 
-    with open(os.path.join(track_dir, 'track_info.pkl'), 'wb') as f:
-        pickle.dump(dict(track_info), f)
-    with open(os.path.join(track_dir, 'track_camera_visible.pkl'), 'wb') as f:
-        pickle.dump(dict(track_camera_visible), f)
-    with open(os.path.join(track_dir, 'trajectory.pkl'), 'wb') as f:
-        pickle.dump(trajectory, f)
-    with open(os.path.join(track_dir, 'track_ids.json'), 'w') as f:
-        json.dump({t: i for i, t in enumerate(trajectory.keys())}, f, indent=2)
-    print('[INFO] GPU track 导出完成')
+        process_log_list = []
+        for idx in process_id_list:
+            process_log_list.append(self.nuplandb_wrapper.log_names[idx])
+        self.process_log_list = process_log_list
 
-    # ---------- 可视化 + dynamic_mask ----------
-    print('[INFO] 开始画框 + 生成 dynamic_mask ...')
-    vis_video_dir = os.path.join(save_dir, 'vis_videos'); os.makedirs(vis_video_dir, exist_ok=True)
-    dynamic_mask_dir = os.path.join(save_dir, 'dynamic_mask'); os.makedirs(dynamic_mask_dir, exist_ok=True)
-    CAM_NAMES = ['CAM_L0', 'CAM_F0', 'CAM_R0', 'CAM_R1', 'CAM_R2', 'CAM_B0', 'CAM_L2', 'CAM_L1']
-    #cam_id_list = [cam_id_map[name] for name in CAM_NAMES]
-    cam_id_list = [cam_id_map[name] for name in CAM_NAMES
-               if cam_id_map.get(name) in valid_cam_ids]
-    if not cam_id_list:
-        print('[WARN] 指定相机编号无有效通道，跳过可视化')
-    else:
-        fps, frame_size = 10, (1920, 1080)
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        writers = {cam_id: cv2.VideoWriter(
-            os.path.join(vis_video_dir, f'{CAM_NAMES[i]}.mp4'),
-            fourcc, fps, frame_size)
-            for i, cam_id in enumerate(cam_id_list)}
-        frame_to_img_path = {
-            (new_idx, cam_id): os.path.join(save_dir, "images", f'{new_idx:06d}_{cam_id}.jpg')
-            for new_idx, _, _, cam_id, _ in ts_slice
-        }
-        mask_cache = {}
-        for new_idx, img_obj, _, _, _ in tqdm(ts_slice, desc='draw+mask'):
-            frame_key = f'{new_idx:06d}'
-            for cam_id in cam_id_list:
-                img_path = frame_to_img_path.get((new_idx, cam_id))
-                if not img_path or not os.path.exists(img_path):
-                    continue
-                canvas = cv2.imread(img_path)
-                h, w = canvas.shape[:2]
-                if cam_id not in mask_cache:
-                    mask_cache[cam_id] = np.zeros((h, w), dtype=np.uint8)
-                mask_canvas = mask_cache[cam_id]
-                for tid in track_camera_visible.get(frame_key, {}).get(cam_id, []):
-                    if tid not in trajectory:
+        self.save_dir = save_dir
+        self.workers = int(workers)
+        self.create_folder()
+
+    # def convert(self):
+    #     """Convert action."""
+    #     print("Start converting ...")
+    #     if self.process_log_list is None:
+    #         id_list = range(len(self))
+    #     else:
+    #         id_list = self.process_log_list
+    #     track_parallel_progress(self.convert_one, id_list, self.workers)
+    #     print("\nFinished ...")
+
+    def convert_one(self, scene_log_name):
+        """Convert action for single file."""
+        # get log db
+        log_db = self.nuplandb_wrapper.get_log_db(scene_log_name)
+
+        # since lidar and images are captured at different frequency
+        # we find the best start frame that lidar and images matches the best
+        # lidar_idx:[0]   1   [2]   3   [4]   5   [6]
+        # timestamp: 0   0.05 0.1  0.15 0.2  0.25 0.3
+        # lidar_pc:  |    |    |    |    |    |    |
+        # Images:    |         |         |         |
+        # NOTE: the best match should be the frame with the closest timestamp to the lidar_pc (e.g. [0] [2] [4] [6])
+        # calulate time shift of original start frame
+        lidar_pc = log_db.lidar_pc[self.start_frame_idx]
+        images = get_images_from_lidar_tokens(
+            log_file=os.path.join(self.split_dir, log_db.log_name + '.db'),
+            tokens=[lidar_pc.token],
+            channels=self.cam_list,
+        )
+        images_timestamps = [image.timestamp for image in images]
+        lidar_timestamp = lidar_pc.timestamp
+        no_shift_time_diff = [abs(lidar_timestamp - timestamp) for timestamp in images_timestamps]
+        # calulate time shift of original start frame + 1
+        lidar_pc = log_db.lidar_pc[self.start_frame_idx + 1]
+        images = get_images_from_lidar_tokens(
+            log_file=os.path.join(self.split_dir, log_db.log_name + '.db'),
+            tokens=[lidar_pc.token],
+            channels=self.cam_list,
+        )
+        images_timestamps = [image.timestamp for image in images]
+        lidar_timestamp = lidar_pc.timestamp
+        shift_time_diff = [abs(lidar_timestamp - timestamp) for timestamp in images_timestamps]
+
+        if sum(no_shift_time_diff) > sum(shift_time_diff):
+            self.lidar_idxs = [idx + 1 for idx in self.lidar_idxs]
+        # else:
+        #     lidar_idxs = self.lidar_idxs
+        with open(os.path.join(f"{self.save_dir}", "lidar", "raw_lidar_idxs.pkl"), 'wb') as f:
+            pickle.dump(self.lidar_idxs, f)
+
+        new_intrinsics, img_timestamps = self.save_image(log_db, self.lidar_idxs)
+        self.save_timestamps(log_db, self.lidar_idxs, img_timestamps)
+        extrinsics = self.save_calib(log_db, new_intrinsics)
+        ego_poses = self.save_pose(log_db, self.lidar_idxs, extrinsics)
+        track_info, track_camera_visible, trajectory = self.save_objects(log_db, self.lidar_idxs, ego_poses,
+                                                                         new_intrinsics, extrinsics)
+        self.save_dynamic_mask(track_info, track_camera_visible, trajectory, new_intrinsics, extrinsics)
+
+    def __len__(self):
+        """Length of the filename list."""
+        return len(self.process_log_list)
+
+    def save_image(self, log_db: NuPlanDB, lidar_idxs: List[int]):
+        """Parse and save the images in jpg format."""
+        img_timestamps = {}  # # 第一级key为帧号，第二级key为相机id，value为该帧该相机对应的时间戳
+        cameras = log_db.camera
+        intrinsics, distortions = {}, {}
+        new_intrinsics = {}
+        for cam in cameras:
+            channel = cam.channel
+            intrinsics[channel] = np.array(cam.intrinsic)
+            distortions[channel] = np.array(cam.distortion)
+        lidar_pcs = log_db.lidar_pc
+        for frame_idx, lidar_idx in tqdm(enumerate(lidar_idxs), total=len(lidar_idxs), desc="Processing images"):
+            if frame_idx >= self.max_frame_limit:
+                break
+            img_timestamps[frame_idx] = {}
+            lidar_pc = lidar_pcs[lidar_idx]
+
+            images = get_images_from_lidar_tokens(
+                log_file=os.path.join(self.split_dir, log_db.log_name + '.db'),
+                tokens=[lidar_pc.token],
+                channels=self.cam_list,
+            )
+
+            image_cnt = 0
+
+            for cam_id, image in enumerate(images):
+                if cam_id not in img_timestamps[frame_idx]:
+                    img_timestamps[frame_idx][cam_id] = {}
+                img_timestamps[frame_idx][cam_id] = image.timestamp
+                raw_image_path = os.path.join(self.sensor_blobs_dir, image.filename_jpg)
+                image_save_path = f"{self.save_dir}/images/{str(frame_idx).zfill(6)}_{cam_id}.jpg"
+
+                channel = self.cam_list[cam_id]
+                undistorted, new_K = undistort_image(raw_image_path, intrinsics[channel], distortions[channel],
+                                                     dst_size=(img_width, img_height))
+                cv2.imwrite(image_save_path, undistorted)
+                # os.system(f'cp {raw_image_path} {image_save_path.replace("images","raw_images")}')
+                new_intrinsics[cam_id] = new_K
+                image_cnt += 1
+
+            assert image_cnt == len(self.cam_list), \
+                f"Image number, camera number mismatch: {image_cnt} != {len(self.cam_list)}"
+        return new_intrinsics, img_timestamps
+
+    def save_timestamps(self, log_db, lidar_idxs, img_timestamps):
+        lidar_pcs = log_db.lidar_pc
+        timestamps = {'FRAME': {}} | {cam: {} for cam in self.cam_list}
+        for frame_idx, lidar_idx in tqdm(enumerate(lidar_idxs), total=len(lidar_idxs), desc="Processing timestamps"):
+            if frame_idx >= self.max_frame_limit:
+                break
+            lidar_pc = lidar_pcs[lidar_idx]
+            timestamps['FRAME'][str(frame_idx).zfill(6)] = lidar_pc.timestamp / 1e6
+            for cam_id, _ in enumerate(self.cam_list):
+                timestamps[self.cam_list[cam_id]][str(frame_idx).zfill(6)] = img_timestamps[frame_idx][cam_id] / 1e6
+        with open(f"{self.save_dir}/timestamps.json", 'w') as f:
+            json.dump(timestamps, f, indent=2)
+
+    def get_cameras_calib(self, log_db: NuPlanDB):
+        """Get the camera calibration."""
+        cameras = log_db.camera
+        extrinsics, intrinsics, distortions = {}, {}, {}
+        for cam in cameras:
+            channel = cam.channel
+            extrinsic = Quaternion(cam.rotation).transformation_matrix
+            extrinsic[:3, 3] = np.array(cam.translation)
+            extrinsics[channel] = extrinsic
+            intrinsic = np.array(cam.intrinsic)
+            intrinsics[channel] = intrinsic
+            distortions[channel] = np.array(cam.distortion)
+
+        return extrinsics, intrinsics, distortions
+
+    def save_calib(self, log_db: NuPlanDB, new_intrinsics):
+        """Parse and save the calibration data."""
+        extrinsics, intrinsics, distortions = self.get_cameras_calib(log_db)
+        extrinsics_by_cam_id = {}
+        for channel in tqdm(self.cam_list, desc="Processing cameras"):
+            cam_id = self.cam_list.index(channel)
+
+            intrinsic = intrinsics[channel]
+            fx, fy, cx, cy = intrinsic[0, 0], intrinsic[1, 1], intrinsic[0, 2], intrinsic[1, 2]
+            k1, k2, p1, p2, k3 = distortions[channel]
+
+            extrinsic = extrinsics[channel]
+            np.savetxt(
+                f"{self.save_dir}/extrinsics/"
+                + f"{str(cam_id)}.txt",
+                extrinsic
+            )
+            extrinsics_by_cam_id[cam_id] = extrinsic
+            if new_intrinsics is None:
+                Ks = np.array([fx, fy, cx, cy, k1, k2, p1, p2, k3])
+            else:
+                intr = new_intrinsics[cam_id]
+                Ks = np.array([intr[0, 0], intr[1, 1], intr[0, 2], intr[1, 2]])
+            np.savetxt(
+                f"{self.save_dir}/intrinsics/"
+                + f"{str(cam_id)}.txt",
+                Ks
+            )
+        return extrinsics_by_cam_id
+
+    def save_pose(self, log_db: NuPlanDB, lidar_idxs: List[int], extrinsics):
+        """Parse and save the pose data."""
+        lidar_pcs = log_db.lidar_pc
+        ego_poses = []
+        for frame_idx, lidar_idx in tqdm(enumerate(lidar_idxs), total=len(lidar_idxs), desc="Processing ego poses"):
+            if frame_idx >= self.max_frame_limit:
+                break
+            lidar_pc = lidar_pcs[lidar_idx]
+
+            ego_pose = get_egopose3d_for_lidarpc_token_from_db(
+                log_file=os.path.join(self.split_dir, log_db.log_name + '.db'),
+                token=lidar_pc.token
+            )
+
+            np.savetxt(
+                f"{self.save_dir}/ego_pose/"
+                + f"{str(frame_idx).zfill(6)}.txt",
+                ego_pose
+            )
+            for cam_id, _ in enumerate(self.cam_list):
+                ego_cam_pose = ego_pose @ extrinsics[cam_id]
+                np.savetxt(f"{self.save_dir}/ego_pose/{frame_idx:06d}_{cam_id}.txt", ego_cam_pose)
+            ego_poses.append(ego_pose)
+        return ego_poses
+
+    def save_dynamic_mask(self, track_info, track_camera_visible, trajectory, new_intrinsics, extrinsics):
+        for idx, (frame, track_info_frame) in tqdm(enumerate(track_info.items()), total=len(track_info),
+                                                   desc="Processing dynamic masks"):
+            track_camera_visible_cur_frame = track_camera_visible[frame]
+            for cam_id, track_ids in track_camera_visible_cur_frame.items():
+                dynamic_mask = np.zeros((img_height, img_width), dtype=np.uint8)
+                for track_id in track_ids:
+                    object_tracklet = trajectory[track_id]
+                    if object_tracklet['stationary']:
                         continue
-                    traj = trajectory[tid]
-                    is_dynamic = not traj['stationary']
-                    if new_idx not in traj['frames']:
-                        continue
-                    idx = traj['frames'].index(new_idx)
-                    pose_v = traj['poses_vehicle'][idx]
-                    dim = [traj['length'], traj['width'], traj['height']]
-                    corners_ego = compute_3d_box_corners(dim, pose_v)
+                    pose_idx = object_tracklet['frames'].index(int(frame))
+                    pose_vehicle = object_tracklet['poses_vehicle'][pose_idx]
+                    height, width, length = object_tracklet['height'], object_tracklet['width'], object_tracklet[
+                        'length']
+
+                    corners_ego = compute_3d_box_corners([length, width, height], pose_vehicle)
                     corners_ego_h = np.hstack([corners_ego, np.ones((8, 1))])
-                    cam_p = cam_param_cpu[cam_id]
-                    K, D, E = cam_p['K'], cam_p['D'], cam_p['E']
-                    ego2cam = np.linalg.inv(E)
+                    ego2cam = np.linalg.inv(extrinsics[cam_id])
                     pts_cam = (ego2cam @ corners_ego_h.T)[:3].T
-                    uv, _ = cv2.projectPoints(pts_cam, np.zeros((3, 1)), np.zeros((3, 1)), K, D)
+                    uv, _ = cv2.projectPoints(pts_cam, np.zeros((3, 1)), np.zeros((3, 1)), new_intrinsics[cam_id],
+                                              np.array([]))
                     uv = uv.squeeze().astype(int)
                     valid = (pts_cam[:, 2] > 0)
                     edges = [(0, 1), (1, 2), (2, 3), (3, 0),
-                            (4, 5), (5, 6), (6, 7), (7, 4),
-                            (0, 4), (1, 5), (2, 6), (3, 7)]
+                             (4, 5), (5, 6), (6, 7), (7, 4),
+                             (0, 4), (1, 5), (2, 6), (3, 7)]
                     for i, j in edges:
                         if valid[i] and valid[j]:
-                            cv2.line(canvas, tuple(uv[i]), tuple(uv[j]), (0, 255, 0), 2)
-                    if is_dynamic and valid.sum() >= 3:
+                            cv2.line(dynamic_mask, tuple(uv[i]), tuple(uv[j]), (0, 255, 0), 2)
+                    if valid.sum() >= 3:
                         hull = cv2.convexHull(uv[valid])
-                        cv2.fillPoly(mask_canvas, [hull], 255)
-                writers[cam_id].write(canvas)
-                mask_path = os.path.join(dynamic_mask_dir, f'{new_idx:06d}_{cam_id}.jpg')
-                cv2.imwrite(mask_path, mask_canvas)
-                mask_cache[cam_id][:] = 0
-        for w in writers.values():
-            w.release()
-        print('[INFO] 视频已保存 ->', vis_video_dir)
-        print('[INFO] dynamic_mask 已保存 ->', dynamic_mask_dir)
+                        cv2.fillPoly(dynamic_mask, [hull], 255)
+                dynamic_mask_path = os.path.join(self.save_dir, "dynamic_mask", f"{str(frame).zfill(6)}_{cam_id}.jpg")
+                cv2.imwrite(dynamic_mask_path, dynamic_mask)
 
-# ---------- 主流程 ----------
-def main(nuplan_root, log_name, save_dir,start_frame,num_frames, skip_existing=False, cam_ids=None):
-    makedirs(save_dir)
-    cam_newK_dict = {}
-    ego_dir = os.path.join(save_dir, 'ego_pose'); makedirs(ego_dir)
-    intr_dir = os.path.join(save_dir, 'intrinsics'); makedirs(intr_dir)
-    ext_dir = os.path.join(save_dir, 'extrinsics'); makedirs(ext_dir)
-    img_dir = os.path.join(save_dir, 'images'); makedirs(img_dir)
-    track_dir = os.path.join(save_dir, 'track'); makedirs(track_dir)
-    dyn_dir = os.path.join(save_dir, 'dynamic_mask'); makedirs(dyn_dir)
+    def save_objects(self, log_db: NuPlanDB, lidar_idxs: List[int], ego_poses, new_intrinsics, extrinsics):
+        """Parse and save the objects annotation data."""
+        track_info = dict()  # 以每个frame的一个bbox为单位 frame_id, track_id 记录LiDAR-synced和Camera_synced bboxes
+        track_camera_visible = dict()  # 以每个camera的一个bbox为单位 frame_id, camera_id, track_id 记录这个camera看到了哪些物体
+        trajectory_info = dict()  # 以每个track物体的一个bbox为单位 track_id, frame_id 记录LiDAR-synced boxes
 
-    db_path = os.path.join(nuplan_root, 'nuplan-v1.1', 'splits', 'mini')
+        lidar_pcs = log_db.lidar_pc
+        for frame_idx, lidar_idx in tqdm(enumerate(lidar_idxs), total=len(lidar_idxs),
+                                         desc="Processing dynamic objects"):
+            if frame_idx >= self.max_frame_limit:
+                break
+            lidar_pc = lidar_pcs[lidar_idx]
+            track_info_cur_frame = dict()
+            track_camera_visible_cur_frame = {cam_id: [] for cam_id, _ in enumerate(self.cam_list)}
 
-    print("[INFO] 初始化 NuPlanDB ...")
-    db = NuPlanDB(data_root=db_path, load_path=log_name)
+            objects_generator = get_tracked_objects_for_lidarpc_token_from_db(
+                log_file=os.path.join(self.split_dir, log_db.log_name + '.db'),
+                token=lidar_pc.token
+            )
+            objects = [obj for obj in objects_generator if obj.category in NUPLAN_DYNAMIC_CLASSES]
+
+            for obj in objects:
+                obj_id = obj.track_token
+                if obj_id not in trajectory_info.keys():
+                    trajectory_info[obj_id] = dict()
+                track_info_cur_frame[obj_id] = dict()
+                obj_to_world = obj.pose
+                l, w, h = obj.box_size
+
+                obj_to_ego = np.linalg.inv(ego_poses[frame_idx]) @ obj_to_world
+                lidar_synced_box = dict()
+                lidar_synced_box['height'] = h
+                lidar_synced_box['width'] = w
+                lidar_synced_box['length'] = l
+                lidar_synced_box['center_x'] = obj_to_ego[0, 3]
+                lidar_synced_box['center_y'] = obj_to_ego[1, 3]
+                lidar_synced_box['center_z'] = obj_to_ego[2, 3]
+                lidar_synced_box['rotation_matrix'] = obj_to_ego[:3, :3]
+                quat = Rotation.from_matrix(obj_to_ego[:3, :3]).as_quat()
+                lidar_synced_box['heading'] = quaternion_yaw(quat)
+                lidar_synced_box['label'] = obj.category
+                lidar_synced_box['speed'] = np.linalg.norm(obj.speed)
+                lidar_synced_box['timestamp'] = obj.timestamp
+                track_info_cur_frame[obj_id]['lidar_box'] = lidar_synced_box
+                trajectory_info[obj_id][f'{frame_idx:06d}'] = lidar_synced_box
+
+                for cam_id, _ in enumerate(self.cam_list):
+                    corners_ego = compute_3d_box_corners([l, w, h], obj_to_ego)
+                    corners_ego_h = np.hstack([corners_ego, np.ones((8, 1))])
+                    ego2cam = np.linalg.inv(extrinsics[cam_id])
+                    pts_cam = (ego2cam @ corners_ego_h.T)[:3].T
+                    uv, _ = cv2.projectPoints(pts_cam, np.zeros((3, 1)), np.zeros((3, 1)), new_intrinsics[cam_id],
+                                              np.array([]))
+                    uv = uv.squeeze()
+                    inside = (uv[:, 0] >= 0) & (uv[:, 0] < img_width) & (uv[:, 1] >= 0) & (uv[:, 1] < img_height) & (
+                                pts_cam[:, 2] > 0)
+                    if inside.any():
+                        track_camera_visible_cur_frame[cam_id].append(obj_id)
+
+            track_info[f'{frame_idx:06d}'] = track_info_cur_frame
+            track_camera_visible[f'{frame_idx:06d}'] = track_camera_visible_cur_frame
+
+        self.reset_information_for_trajectory(trajectory_info, track_camera_visible, track_info, ego_poses)
+        track_dir = f"{self.save_dir}/track"
+        with open(os.path.join(track_dir, "track_info.pkl"), 'wb') as f:
+            pickle.dump(track_info, f)
+
+        with open(os.path.join(track_dir, "track_camera_visible.pkl"), 'wb') as f:
+            pickle.dump(track_camera_visible, f)
+
+        with open(os.path.join(track_dir, "trajectory.pkl"), 'wb') as f:
+            pickle.dump(trajectory_info, f)
+
+        with open(os.path.join(track_dir, "track_ids.json"), 'w') as f:
+            json.dump({t: i for i, t in enumerate(trajectory_info.keys())}, f, indent=2)
+        return track_info, track_camera_visible, trajectory_info
+
+    def create_folder(self):
+        if "images" in self.process_keys:
+            os.makedirs(f"{self.save_dir}/images", exist_ok=True)
+            os.makedirs(f"{self.save_dir}/sky_masks", exist_ok=True)
+        if "pose" in self.process_keys:
+            os.makedirs(f"{self.save_dir}/ego_pose", exist_ok=True)
+        if "calib" in self.process_keys:
+            os.makedirs(f"{self.save_dir}/extrinsics", exist_ok=True)
+            os.makedirs(f"{self.save_dir}/intrinsics", exist_ok=True)
+        if "lidar" in self.process_keys:
+            os.makedirs(f"{self.save_dir}/lidar", exist_ok=True)
+        if "dynamic_masks" in self.process_keys:
+            os.makedirs(f"{self.save_dir}/dynamic_mask", exist_ok=True)
+        if "objects" in self.process_keys:
+            os.makedirs(f"{self.save_dir}/track", exist_ok=True)
+
+    def reset_information_for_trajectory(self, trajectory_info, track_camera_visible, track_info, ego_frame_poses):
+        # reset information for trajectory
+        # poses, stationary, symmetric, deformable
+        for obj_id in tqdm(trajectory_info.keys(), desc="Resetting trajectory information"):
+            # for obj_id in trajectory_info.keys():
+            new_trajectory = dict()
+            trajectory = trajectory_info[obj_id]
+            trajectory = dict(sorted(trajectory.items(), key=lambda item: item[0]))
+
+            dims = []
+            frames = []
+            timestamps = []
+            poses_vehicle = []
+            poses_world = []
+            speeds = []
+
+            for frame_id, bbox in trajectory.items():
+                label = bbox['label']
+                dims.append([bbox['height'], bbox['width'], bbox['length']])
+                frames.append(int(frame_id))
+                timestamps.append(bbox['timestamp'])
+                speeds.append(bbox['speed'])
+                pose_vehicle = np.eye(4)
+                pose_vehicle[:3, :3] = bbox['rotation_matrix']
+                pose_vehicle[:3, 3] = np.array([bbox['center_x'], bbox['center_y'], bbox['center_z']])
+
+                ego_pose = ego_frame_poses[int(frame_id)]
+                pose_world = np.matmul(ego_pose, pose_vehicle)
+
+                poses_vehicle.append(pose_vehicle.astype(np.float32))
+                poses_world.append(pose_world.astype(np.float32))
+
+            dims = np.array(dims).astype(np.float32)
+            dim = np.max(dims, axis=0)
+            poses_vehicle = np.array(poses_vehicle).astype(np.float32)
+            poses_world = np.array(poses_world).astype(np.float32)
+            actor_world_postions = poses_world[:, :3, 3]
+            distance = np.linalg.norm(actor_world_postions[0] - actor_world_postions[-1])
+            dynamic = (np.any(np.std(actor_world_postions, axis=0) > 0.5) or distance > 2) and np.mean(speeds) > 0.001
+
+            new_trajectory['label'] = label
+            new_trajectory['height'], new_trajectory['width'], new_trajectory['length'] = dim[0], dim[1], dim[2]
+            new_trajectory['poses_vehicle'] = poses_vehicle
+            new_trajectory['timestamps'] = timestamps
+            new_trajectory['frames'] = frames
+            new_trajectory['speeds'] = speeds
+            new_trajectory['symmetric'] = (label != 'pedestrian')
+            new_trajectory['deformable'] = (label == 'pedestrian')
+            new_trajectory['stationary'] = not dynamic
+            trajectory_info[obj_id] = new_trajectory
+
+            if not dynamic: # 上面的过滤会有速度为0的被视为动态对象，这里强行删除一下。因为nuplan是自动标注，很多静态对象被标注出来，速度为0
+                for frame_id in range(len(ego_frame_poses)):
+                    if obj_id in track_info[str(frame_id).zfill(6)]:
+                        del track_info[str(frame_id).zfill(6)][obj_id]
+                    for cam_id, _ in enumerate(self.cam_list):
+                        visible_objs = track_camera_visible[str(frame_id).zfill(6)][cam_id]
+                        track_camera_visible[str(frame_id).zfill(6)][cam_id] = list(filter(lambda x: x != obj_id, visible_objs))
+
+        to_be_remove = []
+        for obj_id, traj in trajectory_info.items():
+            if traj['stationary']:
+                to_be_remove.append(obj_id)
+        for obj_id in to_be_remove:
+            if obj_id in trajectory_info:
+                del trajectory_info[obj_id]
 
 
-    ts_slice, cam_id_map = _build_per_camera_frames(db, start_frame=start_frame,num_frames=num_frames)
-    print("[INFO] 相机通道映射:", cam_id_map)
-
-    # 放在解析完 db 之后，拿到 cam_id_map 即可
-    valid_cam_ids = set(cam_ids) if cam_ids is not None else set(cam_id_map.values())
-    print(valid_cam_ids)
-    if cam_ids is not None and not valid_cam_ids.issubset(cam_id_map.values()):
-        raise ValueError(f'无效相机编号 {cam_ids}，合法编号 {list(cam_id_map.values())}')
-
-    # timestamps.json（原始时间戳）
-    ts_nested = defaultdict(dict)
-    for idx, _, ts, cam_id, _ in ts_slice:
-        if cam_id not in valid_cam_ids:
-            continue
-        cam_name = [k for k, v in cam_id_map.items() if v == cam_id][0]
-        ts_nested[cam_name][f"{idx:06d}"] = float(ts)
-    ts_json_path = os.path.join(save_dir, 'timestamps.json')
-    with open(ts_json_path, 'w') as f:
-        json.dump(ts_nested, f, indent=2)
-    print(f"[INFO] timestamps.json 已写入，共 {len(ts_slice)} 条")
-
-    ego_cache = {}
-    for ego in db.ego_pose:
-        raw_ts = identity_ts(ego.timestamp)
-        t = np.array([ego.x, ego.y, ego.z])
-        rot = Rotation.from_quat([ego.qx, ego.qy, ego.qz, ego.qw]).as_matrix()
-        T = np.eye(4)
-        T[:3, :3] = rot
-        T[:3, 3] = t
-        ego_cache[ego.token] = (raw_ts, T)
-    sensor_root = os.path.join(nuplan_root, 'nuplan-v1.1', 'sensor_blobs')
-    print("[INFO] 导出 images（去畸变 + 重命名）...")
-
-    for new_idx, img_obj, ts, cam_id, filename_jpg in tqdm(ts_slice, desc='copy'):
-        if cam_id not in valid_cam_ids:      # ← 只处理指定相机
-            continue
-        ego_ts, ego_T = ego_cache.get(img_obj.ego_pose_token, (0., np.eye(4)))
-        ego_file = os.path.join(ego_dir, f"{new_idx:06d}.txt")
-        #if not (skip_existing and os.path.exists(ego_file)):
-        if cam_id==0:
-            np.savetxt(ego_file, ego_T, fmt='%.8f')
-
-        cam = db.camera.get(img_obj.camera_token)
-        cam_pose = ego_T #@ cam.trans_matrix
-        cam_file = os.path.join(ego_dir, f"{new_idx:06d}_{cam_id}.txt")
-        if not (skip_existing and os.path.exists(cam_file)):
-            np.savetxt(cam_file, cam_pose, fmt='%.8f')
-
-        out_name = f"{new_idx:06d}_{cam_id}.jpg"
-        out_path = os.path.join(img_dir, out_name)
-        if skip_existing and os.path.exists(out_path):
-            continue
-        src_path = os.path.join(sensor_root, filename_jpg)
-        if not os.path.isfile(src_path):
-            print(f"[WARN] 缺失源图: {src_path}")
-            continue
-        K = cam.intrinsic_np
-        D = cam.distortion_np
-        dst, new_K = undistort_image(src_path, K, D, dst_size=(1920, 1080))
-        cam_newK_dict[cam_id] = new_K
-        cv2.imwrite(out_path, dst)
-    print("[DONE] 图像转换完成")
-    
-    
-    print("[INFO] 导出相机标定 ...")
-    for cam in db.camera:
-        cam_id = cam_id_map.get(cam.channel)
-        if cam_id not in valid_cam_ids:      # ← 只保存指定相机
-            continue
-        cam_id = cam_id_map.get(cam.channel, 0)
-        K = cam.intrinsic_np
-        D = cam.distortion_np
-        waymo_vec = np.array([
-            K[0,0], K[1,1], K[0,2], K[1,2],
-            D[0], D[1], D[2], D[3], D[4] if len(D) >= 5 else 0.
-        ]).reshape(9, 1)
-        np.savetxt(os.path.join(intr_dir, f"{cam_id}.txt"), waymo_vec, fmt='%.8f')
-        E = cam.trans_matrix
-        #E = np.matmul(E, opencv2camera)
-        np.savetxt(os.path.join(ext_dir, f"{cam_id}.txt"), E, fmt='%.8f')
-    print("[INFO] 相机标定导出完成")
-
-    export_track_trajectory_gpu(db, ts_slice, cam_id_map,
-                                ego_cache, save_dir,
-                                skip_existing=skip_existing,
-                                cam_newK_dict=cam_newK_dict,valid_cam_ids=valid_cam_ids)
-
-# ---------- 入口 ----------
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--nuplan_root', required=True, help='nuPlan dataset root (data_root)')
     parser.add_argument('--log_name', required=True, help='log name token')
     parser.add_argument('--save_dir', required=True)
-    parser.add_argument('--skip_existing', action='store_true')
-    parser.add_argument('--start_frame', type=int,default=0, help='从哪一帧开始提取')
-    parser.add_argument('--num_frames', type=int,default=200, help='提取的帧数')
-    parser.add_argument('--cam_ids', type=int, nargs='+', default=None,
-                        help='仅导出指定相机编号（如 0 1 3），不指定则导出全部')
+    parser.add_argument('--start_frame', type=int, default=0, help='从哪一帧开始提取')
+    parser.add_argument('--num_frames', type=int, default=200, help='提取的帧数')
 
     args = parser.parse_args()
-    main(args.nuplan_root, args.log_name, args.save_dir,start_frame=args.start_frame,num_frames=args.num_frames,
-         skip_existing=args.skip_existing,cam_ids=args.cam_ids)
+    processor = NuPlanProcessor(load_dir=args.nuplan_root, save_dir=args.save_dir, start_frame_idx=args.start_frame,
+                                max_frame_limit=args.num_frames, process_id_list=[0])
+    processor.convert_one(args.log_name)
+# python nuplan_preprocess.py --nuplan_root /mnt/data/dataset/nuPlan/raw --log_name 2021.05.12.22.00.38_veh-35_01008_01518 --save_dir /mnt/data/dataset/nuPlan/processed/01518_frame_1000_1200 --start_frame 1000 --num_frames 200
