@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# GPU-enabled base image with CUDA 12.1 and build tools for compiling extensions
+# GPU-enabled base image with CUDA 12.8 and build tools for compiling extensions
 FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -8,11 +8,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0" \
     FORCE_CUDA=1
-
-# Enable Universe repo (COLMAP resides in Universe on Ubuntu)
-# RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common \
-#     && add-apt-repository -y universe \
-#     && rm -rf /var/lib/apt/lists/*
 
 # System deps: Python, build essentials, and libraries for OpenCV/Open3D/nvdiffrast
 # Install COLMAP via distribution binaries (per Repology overview) to avoid source builds

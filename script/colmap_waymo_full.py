@@ -112,12 +112,13 @@ def run_colmap_waymo(result):
             cv2.imwrite(new_mask_filename, flip_mask)
 
     # https://colmap.github.io/faq.html#mask-image-regions
-    os.system(f'colmap feature_extractor \
+    os.system(f'QT_QPA_PLATFORM=offscreen colmap feature_extractor \
             --ImageReader.mask_path {mask_images_dir} \
             --ImageReader.camera_model SIMPLE_PINHOLE  \
             --ImageReader.single_camera_per_folder 1 \
             --database_path {colmap_dir}/database.db \
-            --image_path {train_images_dir}')
+            --image_path {train_images_dir} \
+            --SiftExtraction.use_gpu 0')
             #--SiftExtraction.use_gpu 0
     # load intrinsic
     camera_infos = dict()
@@ -259,12 +260,14 @@ def run_colmap_waymo(result):
     with open(rigid_config_path, "w+") as f:
         json.dump([cam_rigid], f, indent=4)
 
-    os.system(f'colmap exhaustive_matcher \
-            --database_path {colmap_dir}/database.db')
+
+    os.system(f'QT_QPA_PLATFORM=offscreen colmap exhaustive_matcher \
+            --database_path {colmap_dir}/database.db \
+            --SiftMatching.use_gpu 0')
 
     triangulated_dir = os.path.join(colmap_dir, 'triangulated/sparse/model')
     os.makedirs(triangulated_dir, exist_ok=True)
-    os.system(f'colmap point_triangulator \
+    os.system(f'QT_QPA_PLATFORM=offscreen colmap point_triangulator \
         --database_path {colmap_dir}/database.db \
         --image_path {train_images_dir} \
         --input_path {model_dir} \
