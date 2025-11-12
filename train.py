@@ -300,7 +300,7 @@ def run_diffusion_progress_for_novel_views(training_args, iteration, restarting,
 
         if cfg.diffusion_parallel == 0:
             # 在主进程中同时进行3DGS和diffusion推理
-            train_frames = [camera.meta['frame'] for camera in train_viewpoint_stack]
+            train_frames = np.array([camera.meta['frame'] for camera in train_viewpoint_stack])
             diffusion_result = diffusion_runner.run(novel_viewpoint_stack, train_frames,
                                                     scene.dataset.getmeta('obj_meta'), use_render=True, scale=scale,
                                                     masked_guidance=iteration >= cfg.diffusion.masked_guidance_iter)  # type: ignore
