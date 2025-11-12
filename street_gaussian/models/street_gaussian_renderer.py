@@ -211,7 +211,7 @@ class StreetGaussianRenderer():
         width = camera.image_width
         height = camera.image_height
 
-        c2w = affine_padding(torch.cat([torch.as_tensor(camera.R[None]), torch.as_tensor(camera.T[None, ..., None])], dim=-1)).to(xyz3, non_blocking=True)
+        # c2w = affine_padding(torch.cat([torch.as_tensor(camera.R[None]), torch.as_tensor(camera.T[None, ..., None])], dim=-1)).to(xyz3, non_blocking=True)
         w2c = torch.as_tensor(camera.world_view_transform.mT.to(xyz3, non_blocking=True))[None]  # 1, 4, 4
         K = torch.as_tensor(camera.K).to(xyz3, non_blocking=True)[None]
 

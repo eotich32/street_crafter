@@ -13,6 +13,7 @@ from street_gaussian.utils.diffusion_utils import getDiffusionRunner
 from create_scene import create_scene
 from easyvolcap.utils.console_utils import *
 from easyvolcap.utils.timer_utils import timer
+from data_processor.waymo_processor import waymo_helpers
 
 timer.disabled = False
 
@@ -123,4 +124,19 @@ def main():
 
 
 if __name__ == "__main__":
+    if cfg.data.get('image_widths', None) is not None:
+        waymo_helpers.image_widths.clear()
+        waymo_helpers.image_widths.extend(cfg.data.get('image_widths'))
+    if cfg.data.get('image_heights', None) is not None:
+        waymo_helpers.image_heights.clear()
+        waymo_helpers.image_heights.extend(cfg.data.get('image_heights'))
+
+    if cfg.data.get('_camera2label', None) is not None:
+        waymo_helpers._camera2label.clear()
+        waymo_helpers._camera2label.update(dict(cfg.data.get('_camera2label')))
+    if cfg.data.get('_label2camera', None) is not None:
+        _label2camera = dict(cfg.data.get('_label2camera'))
+        _label2camera = {int(k[1:]): v for k,v in _label2camera.items()} # yaml中的key为_0, _1的格式，因为不能直接用整数0,1。这里转成整数
+        waymo_helpers._label2camera.clear()
+        waymo_helpers._label2camera.update(_label2camera)
     main()

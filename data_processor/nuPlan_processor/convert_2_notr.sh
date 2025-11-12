@@ -35,8 +35,7 @@ python nuplan_converter.py \
     --log_name "${LOG_NAME}" \
     --save_dir "${SAVE_DIR}" \
     --start_frame "${START_FRAME}" \
-    --num_frames "${NUM_FRAMES}" \
-    --cam_ids 0 1 2 3 4 5 6 7
+    --num_frames "${NUM_FRAMES}"
 
 echo "执行 nuplan_get_lidar_pcd.py ..."
 conda activate streetcrafter && \

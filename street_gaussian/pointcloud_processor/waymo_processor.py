@@ -106,7 +106,6 @@ class WaymoPointCloudProcessor(BasePointCloudProcessor):
         # read actor lidar
         lidar_actor_dir = os.path.join(lidar_dir, 'actor')
         for i, track_id in enumerate(tqdm(os.listdir(lidar_actor_dir), desc='Reading Actor ply')):
-        # for track_id in os.listdir(lidar_actor_dir):
             ply_dict_actor = dict()
 
             lidar_actor_dir_ = os.path.join(lidar_actor_dir, track_id)
@@ -153,7 +152,7 @@ class WaymoPointCloudProcessor(BasePointCloudProcessor):
             return False
 
     def initailize_ply(self, datadir, objects_info):
-        super().initailize_ply(datadir, objects_info)   
+        super().initailize_ply(datadir, objects_info)
         input_ply_dir = os.path.join(datadir, 'input_ply')
         ply_sky_path = os.path.join(input_ply_dir, 'points3D_sky.ply')
         sky_mask_dir = os.path.join(cfg.source_path, 'sky_mask')
@@ -168,7 +167,7 @@ class WaymoPointCloudProcessor(BasePointCloudProcessor):
             sky_mask_lists = [(cv2.imread(sky_mask_path)[..., 0] > 0).reshape(-1) for sky_mask_path in sky_mask_paths]
             #sky_pixel_all = np.sum(np.stack(sky_mask_lists, axis=0))
 
-            for i, sky_mask_path in enumerate(sky_mask_paths):
+            for i, sky_mask_path in tqdm(enumerate(sky_mask_paths), total=len(sky_mask_paths), desc="Processing sky masks"):
                 basename = os.path.basename(sky_mask_path)
                 frame, cam = image_filename_to_frame(basename), image_filename_to_cam(basename)
                 image_path = os.path.join(cfg.source_path, 'images', basename)
@@ -176,7 +175,6 @@ class WaymoPointCloudProcessor(BasePointCloudProcessor):
                 H, W, _ = image.shape
                 
                 sky_mask = sky_mask_lists[i]
-                sky_pixel = sky_mask.sum()
                 sky_indices = np.argwhere(sky_mask == True)[..., 0]
                 if len(sky_indices) == 0: 
                     continue
@@ -227,6 +225,10 @@ class WaymoPointCloudProcessor(BasePointCloudProcessor):
 
         ply_frame_dict = self.make_lidar_ply(start_frame=start_frame, end_frame=end_frame, actor_ids=actor_ids)
         ply_frame = [ply_frame_dict.pop('background')]
+        frame_id = camera.meta['frame']
+        world_pose_in_ego = np.linalg.inv(self.ego_frame_poses[frame_id])
+        tmp = camera.meta['ego_pose'] @ world_pose_in_ego
+        ply_frame[0] = self.transform_lidar_ply(ply_frame[0], tmp)
 
         if cfg.diffusion.shuffle_actors:
             names = list(ply_frame_dict.keys())
