@@ -50,6 +50,11 @@ RUN python3 -m pip install --no-build-isolation "git+https://github.com/dendenxu
 # Copy project sources
 COPY . /workspace
 
+# Preload caches: copy everything from temp build cache directory into /root/.cache
+# Place your prepared files at build context path: .docker-build-cache/
+RUN mkdir -p /root/.cache
+COPY .docker-build-cache/ /root/.cache/
+
 # Build local CUDA/C++ extensions (e.g., simple-knn)
 RUN python3 -m pip install --no-cache-dir --no-build-isolation ./submodules/simple-knn
 
