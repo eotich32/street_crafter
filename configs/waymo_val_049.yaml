@@ -8,3 +8,5 @@ data:
 diffusion:
     use_img_diffusion: False
 
+diffusion:
+    use_diffusion: False
