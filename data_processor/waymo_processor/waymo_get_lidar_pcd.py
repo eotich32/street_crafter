@@ -362,44 +362,8 @@ def save_lidar(root_dir, seq_path, seq_save_dir):
             storePly(ply_actor_path_full, xyzs, rgbs, masks)
         except:
             pass # No pcd
-            
-    # read per frame background LiDAR
-    # lidar_bkgd_dir = os.path.join(seq_save_dir, 'lidar', 'background')
-    # bkgd_ply_list = sorted([os.path.join(lidar_bkgd_dir, f) for f in os.listdir(lidar_bkgd_dir) if f.endswith('.ply') and f != 'full.ply'])
-    # bkgd_ply_xyz = []
-    # bkgd_ply_rgb = []
-    # for bkgd_ply_path in tqdm(bkgd_ply_list, desc='Reading background LiDAR'):
-    #     frame = int(os.path.basename(bkgd_ply_path).split('.')[0])
-    
-    #     ply_curframe = fetchPly(bkgd_ply_path)
-    #     mask = ply_curframe.mask
-    #     xyz_vehicle = ply_curframe.points[mask]
-    #     xyz_vehicle_homo = np.concatenate([xyz_vehicle, np.ones_like(xyz_vehicle[..., :1])], axis=-1)
-    #     xyz_world = xyz_vehicle_homo @ ego_frame_poses[frame].T
-    #     xyz_world = xyz_world[..., :3]
-    #     rgb = ply_curframe.colors[mask]
- 
-    #     bkgd_ply_xyz.append(xyz_world)
-    #     bkgd_ply_rgb.append(rgb)
-    
-    # # raw pointcloud
-    # bkgd_ply_xyz = np.concatenate(bkgd_ply_xyz, axis=0)
-    # bkgd_ply_rgb = np.concatenate(bkgd_ply_rgb, axis=0)
 
-    # # downsample
-    # print('Downsample background LiDAR')
-    # bkgd_ply = o3d.geometry.PointCloud()
-    # bkgd_ply.points = o3d.utility.Vector3dVector(bkgd_ply_xyz)
-    # bkgd_ply.colors = o3d.utility.Vector3dVector(bkgd_ply_rgb)
-    # bkgd_ply = bkgd_ply.voxel_down_sample(voxel_size=0.15)
-    # bkgd_ply, _ = bkgd_ply.remove_radius_outlier(nb_points=10, radius=0.5)
-    # bkgd_ply_xyz = np.asarray(bkgd_ply.points).astype(np.float32)
-    # bkgd_ply_rgb = np.asarray(bkgd_ply.colors).astype(np.float32)
-    
-    # bkgd_ply_mask = np.ones_like(bkgd_ply_xyz[..., :1]).astype(np.bool_)
-    # store_path = os.path.join(lidar_bkgd_dir, f'full.ply')
-    # storePly(store_path, bkgd_ply_xyz, bkgd_ply_rgb, bkgd_ply_mask)
-    
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--root_dir', type=str, default='/nas/home/yanyunzhi/waymo/training')
@@ -410,20 +374,16 @@ def main():
     root_dir = args.root_dir
     save_dir = args.save_dir
 
-    all_sequence_names = sorted([x for x in os.listdir(root_dir) if x.endswith('.tfrecord')])
-    all_sequence_paths = [os.path.join(root_dir, x) for x in all_sequence_names]
-    for i, sequence_path in enumerate(all_sequence_paths):
-        print(f'{i}: {sequence_path}')
-        sequence_save_dir = os.path.join(save_dir, str(i).zfill(3))
-        if os.path.exists(os.path.join(sequence_save_dir, 'lidar/depth')) and args.skip_existing:
-            print(f'lidar pcd exists for {sequence_path}, skipping...')
-            continue
-                
-        save_lidar(
-            root_dir=root_dir,
-            seq_path=sequence_path,
-            seq_save_dir=sequence_save_dir,
-        )
+    i = 90
+    sequence_path = '17612470202990834368_2800_000_2820_000'
+    print(f'{i}: {sequence_path}')
+    sequence_save_dir = os.path.join(save_dir, str(i).zfill(3))
+
+    save_lidar(
+        root_dir=root_dir,
+        seq_path=sequence_path,
+        seq_save_dir=sequence_save_dir,
+    )
 
     
 if __name__ == '__main__':

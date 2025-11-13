@@ -159,11 +159,19 @@ def get_novel_view_loss(diffusion_runner, viewpoint_cam, image, mask, optim_args
 def get_raw_view_loss(gaussians_renderer, gaussians, viewpoint_cam, acc, depth, image, gt_image, mask, sky_mask, obj_bound, iteration, optim_args):
     scalar_dict = dict()
     # rgb loss
-    Ll1 = l1_loss(image, gt_image, mask)
-    ssim_value = ssim(image, gt_image, mask=mask)
-    lpips_value = lpips(image * mask, gt_image * mask)
-    loss = (1.0 - optim_args.lambda_dssim) * optim_args.lambda_l1 * Ll1 + optim_args.lambda_dssim * (
-                1.0 - ssim_value) + optim_args.lambda_lpips * lpips_value
+    if cfg.task == 'pandaset' and viewpoint_cam.meta['cam'] == 5: # 后相机图像下半部分有后备箱 TODO
+        raw_height = waymo_helpers.image_heights[5]
+        real_height = image.shape[1]
+        separator = int(820/raw_height*real_height)
+        Ll1 = l1_loss(image[:, :separator, :], gt_image[:, :separator, :], mask[:, :separator, :])
+        ssim_value = ssim(image[:, :separator, :], gt_image[:, :separator, :], mask=mask[:, :separator, :])
+        lpips_value = lpips(image[:, :separator, :] * mask[:, :separator, :], gt_image[:, :separator, :] * mask[:, :separator, :])
+        loss = (1.0 - optim_args.lambda_dssim) * optim_args.lambda_l1 * Ll1 + optim_args.lambda_dssim * (1.0 - ssim_value) + optim_args.lambda_lpips * lpips_value
+    else:
+        Ll1 = l1_loss(image, gt_image, mask)
+        ssim_value = ssim(image, gt_image, mask=mask)
+        lpips_value = lpips(image * mask, gt_image * mask)
+        loss = (1.0 - optim_args.lambda_dssim) * optim_args.lambda_l1 * Ll1 + optim_args.lambda_dssim * (1.0 - ssim_value) + optim_args.lambda_lpips * lpips_value
     scalar_dict['l1_loss'] = Ll1.item()
     scalar_dict['ssim'] = ssim_value.item()
     scalar_dict['lpips'] = lpips_value.item()
@@ -220,7 +228,7 @@ def get_raw_view_loss(gaussians_renderer, gaussians, viewpoint_cam, acc, depth, 
 
 def save_images(diffusion_runner, gaussians_renderer, viewpoint_cam, gaussians, depth, acc, gt_image, image, iteration):
     is_save_images = True
-    if is_save_images and (iteration % 1000 == 0):
+    if is_save_images and (iteration == 10 or iteration % 1000 == 0):
         # row0: gt_image, image, depth
         # row1: acc, image_obj, acc_obj
         depth_colored, _ = visualize_depth_numpy(depth.detach().cpu().numpy().squeeze(0))
@@ -245,7 +253,7 @@ def save_images(diffusion_runner, gaussians_renderer, viewpoint_cam, gaussians, 
         image_to_show = torch.cat([row0, row1], dim=1)
         image_to_show = torch.clamp(image_to_show, 0.0, 1.0)
         os.makedirs(f"{cfg.model_path}/log_images", exist_ok=True)
-        save_img_torch(image_to_show, f"{cfg.model_path}/log_images/{iteration}.jpg")
+        save_img_torch(image_to_show, f"{cfg.model_path}/log_images/{iteration}_frame_{viewpoint_cam.meta['frame']}_cam_{viewpoint_cam.meta['cam']}.jpg")
 
 
 def update_progress_bar(progress_bar, gaussians, iteration, image, gt_image, mask, viewpoint_cam, loss, ema_loss_for_log, ema_psnr_for_log):
@@ -459,7 +467,7 @@ def training():
         iter_end.record()  # type: ignore
 
         with torch.no_grad():
-            # save_images(gaussians_renderer, viewpoint_cam, gaussians, depth, acc, gt_image, image, iteration)
+            save_images(diffusion_runner, gaussians_renderer, viewpoint_cam, gaussians, depth, acc, gt_image, image, iteration)
 
             tensor_dict = dict()
             ema_loss_for_log, ema_psnr_for_log = update_progress_bar(progress_bar, gaussians, iteration, image, gt_image, mask, viewpoint_cam, loss, ema_loss_for_log, ema_psnr_for_log)
