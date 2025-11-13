@@ -181,7 +181,12 @@ def readWaymoInfo(path, images='images', split_train=-1, split_test=-1, **kwargs
         FovY = focal2fov(fy, height)
         FovX = focal2fov(fx, width)
 
-        c2w = ego_pose @ ext
+        if cfg.task == 'waymo':
+            # waymo本身虽然在ego_pose目录下有N个相机位姿文件，但相机位姿和主车位姿是相同的，所以要乘以外参才是相机位姿(c2w)
+            # 其他数据集相机位姿文件直接读出来的就是c2w
+            c2w = ego_pose @ ext
+        else:
+            c2w = ego_pose
         RT = np.linalg.inv(c2w)
         R = RT[:3, :3].T
         T = RT[:3, 3]

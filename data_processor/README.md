@@ -197,7 +197,7 @@ Please follow Section 1, 2 of [this document](https://github.com/ziyc/drivestudi
 
 ### Process dataset
 ```shell
-python pandaset_processor/pandaset_convertor.py \
+python pandaset_processor/pandaset_converter.py \
     --data_root {ROOT_DIR} \
     --target_dir {SAVE_DIR} \  
     --process_keys images lidar_forward calib pose dynamic_masks objects

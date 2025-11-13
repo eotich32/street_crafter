@@ -122,20 +122,20 @@ class WaymoPointCloudProcessor(BasePointCloudProcessor):
                 xyz = actor_ply.points[mask]
                 rgb = actor_ply.colors[mask]
 
-                if self.trajectory is not None and not self.trajectory[track_id]['deformable']:
-                    num_pointcloud_1 = (xyz[:, self.flip_axis] > 0).sum()
-                    num_pointcloud_2 = (xyz[:, self.flip_axis] < 0).sum()
-                    if num_pointcloud_1 >= num_pointcloud_2:
-                        xyz_part = xyz[xyz[:, self.flip_axis] > 0]
-                        rgb_part = rgb[xyz[:, self.flip_axis] > 0]
-                    else:
-                        xyz_part = xyz[xyz[:, self.flip_axis] < 0]
-                        rgb_part = rgb[xyz[:, self.flip_axis] < 0]
-                    xyz_flip = xyz_part.copy()
-                    xyz_flip[:, self.flip_axis] *= -1
-                    rgb_flip = rgb_part.copy()
-                    xyz = np.concatenate([xyz, xyz_flip], axis=0)
-                    rgb = np.concatenate([rgb, rgb_flip], axis=0)
+                # if self.trajectory is not None and not self.trajectory[track_id]['deformable']:
+                #     num_pointcloud_1 = (xyz[:, self.flip_axis] > 0).sum()
+                #     num_pointcloud_2 = (xyz[:, self.flip_axis] < 0).sum()
+                #     if num_pointcloud_1 >= num_pointcloud_2:
+                #         xyz_part = xyz[xyz[:, self.flip_axis] > 0]
+                #         rgb_part = rgb[xyz[:, self.flip_axis] > 0]
+                #     else:
+                #         xyz_part = xyz[xyz[:, self.flip_axis] < 0]
+                #         rgb_part = rgb[xyz[:, self.flip_axis] < 0]
+                #     xyz_flip = xyz_part.copy()
+                #     xyz_flip[:, self.flip_axis] *= -1
+                #     rgb_flip = rgb_part.copy()
+                #     xyz = np.concatenate([xyz, xyz_flip], axis=0)
+                #     rgb = np.concatenate([rgb, rgb_flip], axis=0)
 
                 ply_dict_actor[frame] = np.concatenate([xyz, rgb], axis=-1)
 
@@ -226,9 +226,6 @@ class WaymoPointCloudProcessor(BasePointCloudProcessor):
         ply_frame_dict = self.make_lidar_ply(start_frame=start_frame, end_frame=end_frame, actor_ids=actor_ids)
         ply_frame = [ply_frame_dict.pop('background')]
         frame_id = camera.meta['frame']
-        world_pose_in_ego = np.linalg.inv(self.ego_frame_poses[frame_id])
-        tmp = camera.meta['ego_pose'] @ world_pose_in_ego
-        ply_frame[0] = self.transform_lidar_ply(ply_frame[0], tmp)
 
         if cfg.diffusion.shuffle_actors:
             names = list(ply_frame_dict.keys())
@@ -249,8 +246,9 @@ class WaymoPointCloudProcessor(BasePointCloudProcessor):
                 [0, 0, 1, box['center_z']],
                 [0, 0, 0, 1]
             ])
-            pose_vehicle = camera.meta['ego_pose'] @ pose_vehicle
-            ply_actor_frame = self.transform_lidar_ply(ply_actor_frame, pose_vehicle)
+            # actor_pose_in_world = camera.meta['ego_pose'] @ pose_vehicle
+            actor_pose_in_world = self.ego_frame_poses[frame_id]@ pose_vehicle
+            ply_actor_frame = self.transform_lidar_ply(ply_actor_frame, actor_pose_in_world)
             ply_frame.append(ply_actor_frame)
 
         ply_frame = np.concatenate(ply_frame, axis=0)
