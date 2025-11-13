@@ -67,7 +67,16 @@ def parse_cfg(cfg, args):
         relative_path = os.path.relpath(cfg.source_path, cfg.workspace)
         cfg.source_path = os.path.join(cur_workspace, relative_path)
         if not os.path.exists(cfg.source_path):
-            __import__('ipdb').set_trace()
+            # Guard interactive debugger in non-TTY environments (e.g., k8s jobs)
+            if os.environ.get("INTERACTIVE_DEBUG") == "1":
+                try:
+                    import pudb
+                    pudb.set_trace()
+                except Exception:
+                    import pdb
+                    pdb.set_trace()
+            else:
+                raise FileNotFoundError(f"source_path does not exist: {cfg.source_path}")
 
     # log directory
     if cfg.record_dir is None:

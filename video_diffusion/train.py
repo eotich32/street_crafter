@@ -897,8 +897,16 @@ if __name__ == "__main__":
 
         def divein(*args, **kwargs):
             if trainer.global_rank == 0:
-                import pudb
-                pudb.set_trace()
+                # Only enter interactive debugger if explicitly enabled
+                if os.environ.get("INTERACTIVE_DEBUG") == "1":
+                    try:
+                        import pudb
+                        pudb.set_trace()
+                    except Exception:
+                        import pdb
+                        pdb.set_trace()
+                else:
+                    print("SIGUSR2 received, interactive debugger disabled (set INTERACTIVE_DEBUG=1 to enable).")
 
         import signal
 
