@@ -47,16 +47,18 @@ RUN python3 -m pip install --no-cache-dir --no-build-isolation -r /workspace/req
 # Install gsplat
 RUN python3 -m pip install --no-build-isolation "git+https://github.com/dendenxu/gsplat.git" 
 
-# Copy project sources
-COPY . /workspace
+## Build local CUDA/C++ extensions first to maximise cache reuse
+# Copy only the simple-knn submodule to avoid invalidating build when other sources change
+COPY submodules/simple-knn/ /workspace/submodules/simple-knn/
+# Build the extension against the already-installed torch
+RUN python3 -m pip install --no-cache-dir --no-build-isolation /workspace/submodules/simple-knn
 
-# Preload caches: copy everything from temp build cache directory into /root/.cache
-# Place your prepared files at build context path: .docker-build-cache/
+# Preload caches next; changes in model/cache won't force extension rebuild
 RUN mkdir -p /root/.cache
 COPY .docker-build-cache/ /root/.cache/
 
-# Build local CUDA/C++ extensions (e.g., simple-knn)
-RUN python3 -m pip install --no-cache-dir --no-build-isolation ./submodules/simple-knn
+# Finally copy full project sources; frequent source changes won't affect above layers
+COPY . /workspace
 
 # Default to interactive shell; bind-mount and run training as needed
 CMD ["bash"]
